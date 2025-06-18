@@ -127,30 +127,32 @@ func (b *Broker) Unregister(client *Client) {
 
 // Publish 向指定主题发布消息
 func (b *Broker) Publish(topic string, msg *Message) {
-	// 本地发布
-	b.publish <- &PublishMessage{
-		Topic:   topic,
-		Message: msg,
-		All:     false,
-	}
 
 	// 在分布式模式下，通过Redis发布
 	if b.distributedMode && b.redisConnector != nil {
 		b.redisConnector.PublishToTopic(topic, msg)
+	} else {
+		// 本地发布
+		b.publish <- &PublishMessage{
+			Topic:   topic,
+			Message: msg,
+			All:     false,
+		}
 	}
 }
 
 // PublishToAll 向所有主题发布消息
 func (b *Broker) PublishToAll(msg *Message) {
-	// 本地发布
-	b.publish <- &PublishMessage{
-		Message: msg,
-		All:     true,
-	}
 
 	// 在分布式模式下，通过Redis发布
 	if b.distributedMode && b.redisConnector != nil {
 		b.redisConnector.PublishToAll(msg)
+	} else {
+		// 本地发布
+		b.publish <- &PublishMessage{
+			Message: msg,
+			All:     true,
+		}
 	}
 }
 
@@ -190,20 +192,8 @@ func (b *Broker) run() {
 					// 如果该主题下没有客户端了，可以考虑在Redis中取消订阅
 					if len(b.clients[client.Topic]) == 0 {
 						delete(b.clients, client.Topic)
-
 						if b.distributedMode && b.redisConnector != nil {
-							// 检查其他主题是否还有使用这个topic的
-							shouldUnsubscribe := true
-							for t := range b.clients {
-								if t == client.Topic {
-									shouldUnsubscribe = false
-									break
-								}
-							}
-
-							if shouldUnsubscribe {
-								b.redisConnector.UnsubscribeTopic(client.Topic)
-							}
+							b.redisConnector.UnsubscribeTopic(client.Topic)
 						}
 					}
 				}
