@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"time"
 
-	"git.yu3.co/lxuanyao/pushlet"
+	"github.com/usual2970/pushlet"
 )
 
 func main() {
 	// 创建 Pushlet 实例
 	p := pushlet.New()
+	p.EnableDistributedMode("localhost:6379", "password", 0) // 启用分布式模式，连接到本地 Redis 实例
 
 	// 启动消息代理
 	p.Start()

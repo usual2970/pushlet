@@ -1,4 +1,4 @@
-module git.yu3.co/lxuanyao/pushlet
+module github.com/usual2970/pushlet
 
 go 1.24.0
 
