@@ -1,6 +1,7 @@
 package pushlet
 
 import (
+	"log"
 	"net/http"
 )
 
@@ -34,6 +35,7 @@ func (p *Pushlet) Stop() {
 // HandleSSE 处理 SSE 连接请求
 // 路径参数可以用于区分不同的主题
 func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
+
 	// 检查请求方法
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -54,13 +56,16 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// 创建新客户端
 	client := NewClient(topic)
+	log.Println("New client requested connection:", client.ID, "topic:", topic)
 
 	// 注册客户端到代理
 	p.broker.Register(client)
 	defer p.broker.Unregister(client)
 
 	// 通知客户端连接已建立
+	log.Println("Sending connection message to client:", client.ID, "topic:", topic)
 	client.SendMessage(NewMessage("connected", "Connection established"))
+	log.Println("Connection message sent to client:", client.ID, "topic:", topic)
 
 	// 保持连接打开直到客户端断开
 	ctx := r.Context()
@@ -83,6 +88,7 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// 等待客户端断开连接
 	<-ctx.Done()
+	log.Println("Client disconnected:", client.ID, "topic:", topic)
 }
 
 // Publish 向指定主题发布消息
