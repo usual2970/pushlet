@@ -21,6 +21,8 @@ func main() {
 	// 处理 SSE 连接请求
 	http.HandleFunc("/events", p.HandleSSE)
 
+	http.HandleFunc("/ws", p.HandleWebsocket)
+
 	// 处理发送消息的请求
 	http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
