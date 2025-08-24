@@ -282,6 +282,9 @@ func (b *Broker) registerClient(client *Client, topic string) {
 	if _, ok := b.clientTopics[client]; !ok {
 		b.clientTopics[client] = make(map[string]bool)
 	}
+	if topic == "" {
+		return
+	}
 
 	// 订阅初始主题
 	b.subscribeClientToTopicUnsafe(client, topic)

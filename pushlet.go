@@ -1,12 +1,16 @@
 package pushlet
 
 import (
+	"bytes"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+var okBytes = []byte("OK")
 
 // Pushlet 是消息推送系统的主要入口点
 type Pushlet struct {
@@ -145,7 +149,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	// 获取主题
 	topic := r.URL.Query().Get("topic")
 	if topic == "" || topic == "/" {
-		topic = "default"
+		topic = ""
 	}
 
 	// 创建新客户端
@@ -164,7 +168,8 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	})
 
 	connectMsg := NewMessage(topic, "connected", "WebSocket connection established")
-	if err := conn.WriteJSON(connectMsg); err != nil {
+	connectBts, _ := json.Marshal(connectMsg)
+	if err := conn.WriteMessage(websocket.BinaryMessage, connectBts); err != nil {
 		log.Println("Error sending connection message:", err)
 		return
 	}
@@ -188,15 +193,16 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// 发送消息到客户端
-			wsMsg := map[string]interface{}{
-				"event":     msg.Event,
-				"data":      msg.Data,
-				"topic":     msg.Topic,
-				"timestamp": time.Now().Unix(),
+			wsMsg := NewMessage(msg.Topic, msg.Event, msg.Data)
+			data, err := json.Marshal(wsMsg)
+			if err != nil {
+				log.Println("Error marshalling WebSocket message:", err)
+				return
 			}
 
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteJSON(wsMsg); err != nil {
+			data = []byte(msg.Topic + " " + string(data))
+			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 				log.Println("Error writing to WebSocket client:", client.ID, "error:", err)
 				return
 			}
@@ -218,8 +224,7 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 	defer conn.Close()
 
 	for {
-		var msg map[string]interface{}
-		err := conn.ReadJSON(&msg)
+		messageType, bts, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("WebSocket error for client %s: %v", client.ID, err)
@@ -228,35 +233,50 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 			break
 		}
 
-		// 处理客户端消息（可选功能）
-		if msgType, ok := msg["type"].(string); ok {
-			switch msgType {
-			case "ping":
-				// 响应客户端的 ping
-				pongMsg := map[string]interface{}{
-					"type":      "pong",
-					"timestamp": time.Now().Unix(),
-				}
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				conn.WriteJSON(pongMsg)
-
-			case "subscribe":
-				// 处理主题订阅（如果需要动态订阅功能）
-				if newTopic, ok := msg["topic"].(string); ok && newTopic != "" {
-					log.Printf("Client %s requesting subscription: %s", client.ID, newTopic)
-					p.broker.Subscribe(client, newTopic)
-				}
-			case "unsubscribe":
-				// 处理主题取消订阅（如果需要动态取消订阅功能）
-				if oldTopic, ok := msg["topic"].(string); ok && oldTopic != "" {
-					log.Printf("Client %s requesting topic unsubscription: %s", client.ID, oldTopic)
-					p.broker.Unsubscribe(client, oldTopic)
-				}
-
-			default:
-				log.Printf("Unknown message type from client %s: %s", client.ID, msgType)
-			}
+		if messageType != websocket.BinaryMessage {
+			log.Printf("Received non-binary message from client %s: %s", client.ID, bts)
+			continue
 		}
+
+		lines := bytes.Split(bts, []byte{'\n'})
+		// 第一行：命令行 (SUB TOPIC\n)
+		commandLine := lines[0]
+		log.Printf("Received command: %s", commandLine)
+
+		// 解析命令
+		parts := bytes.Split(commandLine, []byte{' '})
+		if len(parts) < 1 {
+			log.Printf("Invalid command from client %s: %s", client.ID, commandLine)
+			continue
+		}
+
+		// 处理客户端消息（可选功能）
+
+		switch {
+		case bytes.Equal(parts[0], []byte("SUB")):
+			// 响应客户端的 ping
+			topic := string(parts[1])
+			log.Printf("Client %s subscribed to topic: %s", client.ID, topic)
+			p.broker.Subscribe(client, topic)
+
+			conn.WriteMessage(websocket.BinaryMessage, okBytes)
+
+		case bytes.Equal(parts[0], []byte("UNSUB")):
+			// 处理主题订阅（如果需要动态订阅功能）
+			topic := string(parts[1])
+			log.Printf("Client %s unsubscribing from topic: %s", client.ID, topic)
+			p.broker.Unsubscribe(client, topic)
+
+			conn.WriteMessage(websocket.BinaryMessage, okBytes)
+		case bytes.Equal(parts[0], []byte("PING")):
+			// 处理主题取消订阅（如果需要动态取消订阅功能）
+			log.Printf("Received PING from client %s", client.ID)
+			conn.WriteMessage(websocket.BinaryMessage, okBytes)
+
+		default:
+			log.Printf("Unknown message type from client %s: %s", client.ID, string(parts[0]))
+		}
+
 	}
 }
 
