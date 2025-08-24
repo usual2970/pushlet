@@ -65,16 +65,16 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 创建新客户端
-	client := NewClient(topic)
+	client := NewClient()
 	log.Println("New client requested connection:", client.ID, "topic:", topic)
 
 	// 注册客户端到代理
-	p.broker.Register(client)
+	p.broker.Register(client, topic)
 	defer p.broker.Unregister(client)
 
 	// 通知客户端连接已建立
 	log.Println("Sending connection message to client:", client.ID, "topic:", topic)
-	client.SendMessage(NewMessage("connected", "Connection established"))
+	client.SendMessage(NewMessage(topic, "connected", "Connection established"))
 	log.Println("Connection message sent to client:", client.ID, "topic:", topic)
 
 	// 获取请求上下文
@@ -149,11 +149,11 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 创建新客户端
-	client := NewClient(topic)
+	client := NewClient()
 	log.Println("New WebSocket client requested connection:", client.ID, "topic:", topic)
 
 	// 注册客户端到代理
-	p.broker.Register(client)
+	p.broker.Register(client, topic)
 	defer p.broker.Unregister(client)
 
 	// 设置连接参数
@@ -163,12 +163,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// 发送连接确认消息
-	connectMsg := map[string]interface{}{
-		"event": "connected",
-		"data":  "Connection established",
-		"topic": topic,
-	}
+	connectMsg := NewMessage(topic, "connected", "WebSocket connection established")
 	if err := conn.WriteJSON(connectMsg); err != nil {
 		log.Println("Error sending connection message:", err)
 		return
@@ -187,7 +182,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		case msg, ok := <-client.Send:
 			if !ok {
 				// 客户端通道已关闭
-				log.Println("WebSocket client channel closed:", client.ID, "topic:", topic)
+				log.Println("WebSocket client channel closed:", client.ID, "topic:", msg.Topic)
 				conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -196,7 +191,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			wsMsg := map[string]interface{}{
 				"event":     msg.Event,
 				"data":      msg.Data,
-				"topic":     topic,
+				"topic":     msg.Topic,
 				"timestamp": time.Now().Unix(),
 			}
 
@@ -229,7 +224,7 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("WebSocket error for client %s: %v", client.ID, err)
 			}
-			log.Println("WebSocket client disconnected:", client.ID, "topic:", client.Topic)
+			log.Println("WebSocket client disconnected:", client.ID)
 			break
 		}
 
@@ -248,8 +243,14 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 			case "subscribe":
 				// 处理主题订阅（如果需要动态订阅功能）
 				if newTopic, ok := msg["topic"].(string); ok && newTopic != "" {
-					log.Printf("Client %s requesting topic change to: %s", client.ID, newTopic)
-					// 这里可以实现主题切换逻辑
+					log.Printf("Client %s requesting subscription: %s", client.ID, newTopic)
+					p.broker.Subscribe(client, newTopic)
+				}
+			case "unsubscribe":
+				// 处理主题取消订阅（如果需要动态取消订阅功能）
+				if oldTopic, ok := msg["topic"].(string); ok && oldTopic != "" {
+					log.Printf("Client %s requesting topic unsubscription: %s", client.ID, oldTopic)
+					p.broker.Unsubscribe(client, oldTopic)
 				}
 
 			default:
@@ -261,10 +262,10 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 
 // Publish 向指定主题发布消息
 func (p *Pushlet) Publish(topic, event, data string) {
-	p.broker.Publish(topic, NewMessage(event, data))
+	p.broker.Publish(topic, NewMessage(topic, event, data))
 }
 
 // PublishToAll 向所有主题发布消息
 func (p *Pushlet) PublishToAll(event, data string) {
-	p.broker.PublishToAll(NewMessage(event, data))
+	p.broker.PublishToAll(NewMessage("global", event, data))
 }

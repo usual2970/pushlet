@@ -4,17 +4,15 @@ import "time"
 
 // Client 表示一个 SSE 客户端连接
 type Client struct {
-	ID    string
-	Topic string
-	Send  chan *Message
+	ID   string
+	Send chan *Message
 }
 
 // NewClient 创建新的客户端连接
-func NewClient(topic string) *Client {
+func NewClient() *Client {
 	return &Client{
-		ID:    generateID(),
-		Topic: topic,
-		Send:  make(chan *Message, 256), // 缓冲通道以避免阻塞
+		ID:   generateID(),
+		Send: make(chan *Message, 256), // 缓冲通道以避免阻塞
 	}
 }
 

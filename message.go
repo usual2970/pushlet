@@ -7,14 +7,16 @@ import (
 
 // Message 表示一个 SSE 消息
 type Message struct {
+	Topic     string    `json:"topic"`
 	Event     string    `json:"event"`
 	Data      string    `json:"data"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
 // NewMessage 创建一个新的消息
-func NewMessage(event, data string) *Message {
+func NewMessage(topic, event, data string) *Message {
 	return &Message{
+		Topic:     topic,
 		Event:     event,
 		Data:      data,
 		Timestamp: time.Now(),

@@ -72,7 +72,8 @@ func (rc *RedisConnector) Stop() {
 
 // SubscribeTopic 订阅特定主题
 func (rc *RedisConnector) SubscribeTopic(topic string) error {
-	return rc.pubsub.Subscribe(rc.ctx, "pushlet:topic:"+topic)
+	err := rc.pubsub.Subscribe(rc.ctx, "pushlet:topic:"+topic)
+	return err
 }
 
 // UnsubscribeTopic 取消订阅特定主题
