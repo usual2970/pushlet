@@ -214,7 +214,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				log.Println("Error sending ping to WebSocket client:", client.ID, "error:", err)
 				return
 			}
-			log.Printf("Ping sent to WebSocket client: %s, topic: %s", client.ID, topic)
+			log.Printf("Ping sent to WebSocket client.ID: %s", client.ID)
 		}
 	}
 }
