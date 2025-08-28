@@ -3,6 +3,7 @@ package pushlet
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -268,32 +269,51 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 		}
 
 		// 处理客户端消息（可选功能）
-
-		switch {
-		case bytes.Equal(parts[0], []byte("SUB")):
-			// 响应客户端的 ping
-			topic := string(parts[1])
-			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client subscribed to topic:")
-			p.broker.Subscribe(client, topic)
-
-			conn.WriteMessage(websocket.BinaryMessage, okBytes)
-
-		case bytes.Equal(parts[0], []byte("UNSUB")):
-			// 处理主题订阅（如果需要动态订阅功能）
-			topic := string(parts[1])
-			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client unsubscribing from topic:")
-			p.broker.Unsubscribe(client, topic)
-
-			conn.WriteMessage(websocket.BinaryMessage, okBytes)
-		case bytes.Equal(parts[0], []byte("PING")):
-			// 处理主题取消订阅（如果需要动态取消订阅功能）
-			p.newLogger().WithField("client_id", client.ID).Println("Received PING from client:")
-			conn.WriteMessage(websocket.BinaryMessage, okBytes)
-
-		default:
-			p.newLogger().WithField("client_id", client.ID).Println("Unknown message type from client:", string(parts[0]))
+		resp, err := p.exec(parts, client)
+		if err != nil {
+			p.newLogger().WithField("client_id", client.ID).Println("Error executing command from client:", err)
+			continue
 		}
 
+		if err := conn.WriteMessage(websocket.BinaryMessage, resp); err != nil {
+			p.newLogger().WithField("client_id", client.ID).Println("Error writing to WebSocket client:", err)
+		}
+	}
+}
+
+func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
+	log := p.newLogger().WithField("client_id", client.ID)
+	log.Println("Executing command from client:", parts)
+	var err error
+	defer func() {
+		if err != nil {
+			log.Println("Error executing command:", err)
+		}
+	}()
+	switch {
+	case bytes.Equal(parts[0], []byte("SUB")):
+		// 响应客户端的 ping
+		topic := string(parts[1])
+		log.WithField("topic", topic).Println("Client subscribed to topic:")
+		p.broker.Subscribe(client, topic)
+
+		return okBytes, nil
+
+	case bytes.Equal(parts[0], []byte("UNSUB")):
+		// 处理主题订阅（如果需要动态订阅功能）
+		topic := string(parts[1])
+		log.WithField("topic", topic).Println("Client unsubscribing from topic:")
+		p.broker.Unsubscribe(client, topic)
+
+		return okBytes, nil
+	case bytes.Equal(parts[0], []byte("PING")):
+		// 处理主题取消订阅（如果需要动态取消订阅功能）
+		log.Println("Received PING from client:")
+		return okBytes, nil
+
+	default:
+		err = errors.New("unknown command")
+		return nil, err
 	}
 }
 
