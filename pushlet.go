@@ -1,10 +1,16 @@
 package pushlet
 
 import (
+	"bytes"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
+
+var okBytes = []byte("OK")
 
 // Pushlet 是消息推送系统的主要入口点
 type Pushlet struct {
@@ -63,16 +69,16 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 创建新客户端
-	client := NewClient(topic)
+	client := NewClient()
 	log.Println("New client requested connection:", client.ID, "topic:", topic)
 
 	// 注册客户端到代理
-	p.broker.Register(client)
+	p.broker.Register(client, topic)
 	defer p.broker.Unregister(client)
 
 	// 通知客户端连接已建立
 	log.Println("Sending connection message to client:", client.ID, "topic:", topic)
-	client.SendMessage(NewMessage("connected", "Connection established"))
+	client.SendMessage(NewMessage(topic, "connected", "Connection established"))
 	log.Println("Connection message sent to client:", client.ID, "topic:", topic)
 
 	// 获取请求上下文
@@ -123,12 +129,163 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// WebSocket 升级器
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // 允许所有来源，生产环境中应该更严格
+	},
+}
+
+// HandleWebsocket 处理 WebSocket 连接请求
+func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
+	// 升级 HTTP 连接到 WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("WebSocket upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
+
+	// 获取主题
+	topic := r.URL.Query().Get("topic")
+	if topic == "" || topic == "/" {
+		topic = ""
+	}
+
+	// 创建新客户端
+	client := NewClient()
+	log.Println("New WebSocket client requested connection:", client.ID, "topic:", topic)
+
+	// 注册客户端到代理
+	p.broker.Register(client, topic)
+	defer p.broker.Unregister(client)
+
+	// 设置连接参数
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	connectMsg := NewMessage(topic, "connected", "WebSocket connection established")
+	connectBts, _ := json.Marshal(connectMsg)
+	if err := conn.WriteMessage(websocket.BinaryMessage, connectBts); err != nil {
+		log.Println("Error sending connection message:", err)
+		return
+	}
+
+	// 创建心跳定时器
+	heartbeatTicker := time.NewTicker(p.heartbeatInterval)
+	defer heartbeatTicker.Stop()
+
+	// 启动读取 goroutine 处理客户端消息
+	go p.handleWebSocketReads(conn, client)
+
+	// 主循环处理发送消息和心跳
+	for {
+		select {
+		case msg, ok := <-client.Send:
+			if !ok {
+				// 客户端通道已关闭
+				log.Println("WebSocket client channel closed:", client.ID, "topic:", msg.Topic)
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			// 发送消息到客户端
+			wsMsg := NewMessage(msg.Topic, msg.Event, msg.Data)
+			data, err := json.Marshal(wsMsg)
+			if err != nil {
+				log.Println("Error marshalling WebSocket message:", err)
+				return
+			}
+
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			data = []byte(msg.Topic + " " + string(data))
+			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+				log.Println("Error writing to WebSocket client:", client.ID, "error:", err)
+				return
+			}
+
+		case <-heartbeatTicker.C:
+			// 发送 ping 消息作为心跳
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Println("Error sending ping to WebSocket client:", client.ID, "error:", err)
+				return
+			}
+			log.Printf("Ping sent to WebSocket client.ID: %s", client.ID)
+		}
+	}
+}
+
+// handleWebSocketReads 处理从 WebSocket 客户端接收的消息
+func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
+	defer conn.Close()
+
+	for {
+		messageType, bts, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error for client %s: %v", client.ID, err)
+			}
+			log.Println("WebSocket client disconnected:", client.ID)
+			break
+		}
+
+		if messageType != websocket.BinaryMessage {
+			log.Printf("Received non-binary message from client %s: %s", client.ID, bts)
+			continue
+		}
+
+		lines := bytes.Split(bts, []byte{'\n'})
+		// 第一行：命令行 (SUB TOPIC\n)
+		commandLine := lines[0]
+		log.Printf("Received command: %s", commandLine)
+
+		// 解析命令
+		parts := bytes.Split(commandLine, []byte{' '})
+		if len(parts) < 1 {
+			log.Printf("Invalid command from client %s: %s", client.ID, commandLine)
+			continue
+		}
+
+		// 处理客户端消息（可选功能）
+
+		switch {
+		case bytes.Equal(parts[0], []byte("SUB")):
+			// 响应客户端的 ping
+			topic := string(parts[1])
+			log.Printf("Client %s subscribed to topic: %s", client.ID, topic)
+			p.broker.Subscribe(client, topic)
+
+			conn.WriteMessage(websocket.BinaryMessage, okBytes)
+
+		case bytes.Equal(parts[0], []byte("UNSUB")):
+			// 处理主题订阅（如果需要动态订阅功能）
+			topic := string(parts[1])
+			log.Printf("Client %s unsubscribing from topic: %s", client.ID, topic)
+			p.broker.Unsubscribe(client, topic)
+
+			conn.WriteMessage(websocket.BinaryMessage, okBytes)
+		case bytes.Equal(parts[0], []byte("PING")):
+			// 处理主题取消订阅（如果需要动态取消订阅功能）
+			log.Printf("Received PING from client %s", client.ID)
+			conn.WriteMessage(websocket.BinaryMessage, okBytes)
+
+		default:
+			log.Printf("Unknown message type from client %s: %s", client.ID, string(parts[0]))
+		}
+
+	}
+}
+
 // Publish 向指定主题发布消息
 func (p *Pushlet) Publish(topic, event, data string) {
-	p.broker.Publish(topic, NewMessage(event, data))
+	p.broker.Publish(topic, NewMessage(topic, event, data))
 }
 
 // PublishToAll 向所有主题发布消息
 func (p *Pushlet) PublishToAll(event, data string) {
-	p.broker.PublishToAll(NewMessage(event, data))
+	p.broker.PublishToAll(NewMessage("global", event, data))
 }
