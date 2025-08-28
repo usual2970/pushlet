@@ -3,7 +3,6 @@ package pushlet
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
@@ -16,14 +15,33 @@ var okBytes = []byte("OK")
 type Pushlet struct {
 	broker            *Broker
 	heartbeatInterval time.Duration // 心跳间隔
+	newLogger         NewLogger
+}
+
+type Option func(*Pushlet)
+
+func WithLogger(newLogger NewLogger) Option {
+	return func(p *Pushlet) {
+		p.newLogger = newLogger
+	}
 }
 
 // New 创建一个新的 Pushlet 实例
-func New() *Pushlet {
-	return &Pushlet{
+func New(options ...Option) *Pushlet {
+	p := &Pushlet{
 		broker:            NewBroker(),
 		heartbeatInterval: 30 * time.Second, // 默认30秒心跳
 	}
+
+	for _, opt := range options {
+		opt(p)
+	}
+
+	if p.newLogger == nil {
+		p.newLogger = NewDefaultLogger
+	}
+
+	return p
 }
 
 // SetHeartbeatInterval 设置心跳间隔
@@ -70,17 +88,16 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// 创建新客户端
 	client := NewClient()
-	log.Println("New client requested connection:", client.ID, "topic:", topic)
+	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("New client requested connection")
 
 	// 注册客户端到代理
 	p.broker.Register(client, topic)
 	defer p.broker.Unregister(client)
 
 	// 通知客户端连接已建立
-	log.Println("Sending connection message to client:", client.ID, "topic:", topic)
+	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Sending connection message to client:")
 	client.SendMessage(NewMessage(topic, "connected", "Connection established"))
-	log.Println("Connection message sent to client:", client.ID, "topic:", topic)
-
+	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Connection message sent to client:")
 	// 获取请求上下文
 	ctx := r.Context()
 	flusher := w.(http.Flusher)
@@ -95,7 +112,7 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		case msg, ok := <-client.Send:
 			if !ok {
 				// 客户端通道已关闭
-				log.Println("Client channel closed:", client.ID, "topic:", topic)
+				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client channel closed:")
 				return
 			}
 
@@ -105,7 +122,7 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 			_, err := w.Write([]byte(eventStr + dataStr))
 			if err != nil {
-				log.Println("Error writing to client:", client.ID, "error:", err)
+				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Error writing to client:", err)
 				return
 			}
 			flusher.Flush()
@@ -115,15 +132,15 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 			heartbeatMsg := ": heartbeat " + time.Now().Format("2006-01-02 15:04:05") + "\n\n"
 			_, err := w.Write([]byte(heartbeatMsg))
 			if err != nil {
-				log.Println("Error sending heartbeat to client:", client.ID, "error:", err)
+				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Error writing heartbeat to client:", err)
 				return
 			}
 			flusher.Flush()
-			log.Printf("Heartbeat sent to client: %s, topic: %s", client.ID, topic)
+			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Heartbeat sent to client:")
 
 		case <-ctx.Done():
 			// 客户端断开连接
-			log.Println("Client disconnected:", client.ID, "topic:", topic)
+			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client disconnected:")
 			return
 		}
 	}
@@ -141,7 +158,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	// 升级 HTTP 连接到 WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("WebSocket upgrade failed:", err)
+		p.newLogger().Println("WebSocket upgrade failed:", err)
 		return
 	}
 	defer conn.Close()
@@ -154,7 +171,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	// 创建新客户端
 	client := NewClient()
-	log.Println("New WebSocket client requested connection:", client.ID, "topic:", topic)
+	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("New WebSocket client requested connection:")
 
 	// 注册客户端到代理
 	p.broker.Register(client, topic)
@@ -170,7 +187,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	connectMsg := NewMessage(topic, "connected", "WebSocket connection established")
 	connectBts, _ := json.Marshal(connectMsg)
 	if err := conn.WriteMessage(websocket.BinaryMessage, connectBts); err != nil {
-		log.Println("Error sending connection message:", err)
+		p.newLogger().Println("Error sending connection message:", err)
 		return
 	}
 
@@ -187,7 +204,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		case msg, ok := <-client.Send:
 			if !ok {
 				// 客户端通道已关闭
-				log.Println("WebSocket client channel closed:", client.ID, "topic:", msg.Topic)
+				p.newLogger().WithField("client_id", client.ID).WithField("topic", msg.Topic).Println("WebSocket client channel closed:")
 				conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -196,14 +213,14 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			wsMsg := NewMessage(msg.Topic, msg.Event, msg.Data)
 			data, err := json.Marshal(wsMsg)
 			if err != nil {
-				log.Println("Error marshalling WebSocket message:", err)
+				p.newLogger().Println("Error marshalling WebSocket message:", err)
 				return
 			}
 
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			data = []byte(msg.Topic + " " + string(data))
 			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
-				log.Println("Error writing to WebSocket client:", client.ID, "error:", err)
+				p.newLogger().WithField("client_id", client.ID).WithField("topic", msg.Topic).Println("Error writing to WebSocket client:", err)
 				return
 			}
 
@@ -211,10 +228,10 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			// 发送 ping 消息作为心跳
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Println("Error sending ping to WebSocket client:", client.ID, "error:", err)
+				p.newLogger().WithField("client_id", client.ID).Println("Error sending ping to WebSocket client:", err)
 				return
 			}
-			log.Printf("Ping sent to WebSocket client.ID: %s", client.ID)
+			p.newLogger().WithField("client_id", client.ID).Println("Ping sent to WebSocket client:")
 		}
 	}
 }
@@ -227,26 +244,26 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 		messageType, bts, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error for client %s: %v", client.ID, err)
+				p.newLogger().WithField("client_id", client.ID).Println("WebSocket error:", err)
 			}
-			log.Println("WebSocket client disconnected:", client.ID)
+			p.newLogger().WithField("client_id", client.ID).Println("WebSocket client disconnected:")
 			break
 		}
 
 		if messageType != websocket.BinaryMessage {
-			log.Printf("Received non-binary message from client %s: %s", client.ID, bts)
+			p.newLogger().WithField("client_id", client.ID).Println("Received non-binary message from client:", bts)
 			continue
 		}
 
 		lines := bytes.Split(bts, []byte{'\n'})
 		// 第一行：命令行 (SUB TOPIC\n)
 		commandLine := lines[0]
-		log.Printf("Received command: %s", commandLine)
+		p.newLogger().Println("Received command:", commandLine)
 
 		// 解析命令
 		parts := bytes.Split(commandLine, []byte{' '})
 		if len(parts) < 1 {
-			log.Printf("Invalid command from client %s: %s", client.ID, commandLine)
+			p.newLogger().WithField("client_id", client.ID).Println("Invalid command from client:", commandLine)
 			continue
 		}
 
@@ -256,7 +273,7 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 		case bytes.Equal(parts[0], []byte("SUB")):
 			// 响应客户端的 ping
 			topic := string(parts[1])
-			log.Printf("Client %s subscribed to topic: %s", client.ID, topic)
+			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client subscribed to topic:")
 			p.broker.Subscribe(client, topic)
 
 			conn.WriteMessage(websocket.BinaryMessage, okBytes)
@@ -264,17 +281,17 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 		case bytes.Equal(parts[0], []byte("UNSUB")):
 			// 处理主题订阅（如果需要动态订阅功能）
 			topic := string(parts[1])
-			log.Printf("Client %s unsubscribing from topic: %s", client.ID, topic)
+			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client unsubscribing from topic:")
 			p.broker.Unsubscribe(client, topic)
 
 			conn.WriteMessage(websocket.BinaryMessage, okBytes)
 		case bytes.Equal(parts[0], []byte("PING")):
 			// 处理主题取消订阅（如果需要动态取消订阅功能）
-			log.Printf("Received PING from client %s", client.ID)
+			p.newLogger().WithField("client_id", client.ID).Println("Received PING from client:")
 			conn.WriteMessage(websocket.BinaryMessage, okBytes)
 
 		default:
-			log.Printf("Unknown message type from client %s: %s", client.ID, string(parts[0]))
+			p.newLogger().WithField("client_id", client.ID).Println("Unknown message type from client:", string(parts[0]))
 		}
 
 	}
