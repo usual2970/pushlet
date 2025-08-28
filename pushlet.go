@@ -277,7 +277,9 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 
 		if err := conn.WriteMessage(websocket.BinaryMessage, resp); err != nil {
 			p.newLogger().WithField("client_id", client.ID).Println("Error writing to WebSocket client:", err)
+			continue
 		}
+		p.newLogger().WithField("client_id", client.ID).Println("Command executed successfully, response sent to client:")
 	}
 }
 
