@@ -152,6 +152,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // 允许所有来源，生产环境中应该更严格
 	},
+	EnableCompression: true,
 }
 
 // HandleWebsocket 处理 WebSocket 连接请求
@@ -251,11 +252,42 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 			break
 		}
 
-		if messageType != websocket.BinaryMessage {
-			p.newLogger().WithField("client_id", client.ID).Println("Received non-binary message from client:", bts)
+		// 处理不同类型的消息
+		switch messageType {
+		case websocket.PingMessage:
+			// 收到 ping，发送 pong 回复
+			p.newLogger().WithField("client_id", client.ID).Println("Received ping, sending pong")
+			if err := conn.WriteMessage(websocket.PongMessage, nil); err != nil {
+				p.newLogger().WithField("client_id", client.ID).Println("Error sending pong:", err)
+				return
+			}
+			continue
+
+		case websocket.PongMessage:
+			// 收到 pong 消息
+			p.newLogger().WithField("client_id", client.ID).Println("Received pong from client")
+			continue
+
+		case websocket.CloseMessage:
+			// 收到关闭消息
+			p.newLogger().WithField("client_id", client.ID).Println("Received close message from client")
+			return
+
+		case websocket.TextMessage:
+			// 处理文本消息（如果需要支持的话）
+			p.newLogger().WithField("client_id", client.ID).Println("Received text message from client:", string(bts))
+			continue
+
+		case websocket.BinaryMessage:
+			// 处理二进制消息（业务逻辑）
+			// 继续执行下面的业务逻辑处理
+
+		default:
+			p.newLogger().WithField("client_id", client.ID).Println("Received unknown message type:", messageType)
 			continue
 		}
 
+		// 只有二进制消息才进行业务逻辑处理
 		lines := bytes.Split(bts, []byte{'\n'})
 		// 第一行：命令行 (SUB TOPIC\n)
 		commandLine := lines[0]
