@@ -271,7 +271,7 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 
 		switch {
 		case bytes.Equal(parts[0], []byte("SUB")):
-			// 响应客户端的 ping
+			// 响应客户端的订阅请求
 			topic := string(parts[1])
 			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client subscribed to topic:")
 			p.broker.Subscribe(client, topic)
@@ -279,14 +279,14 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 			conn.WriteMessage(websocket.BinaryMessage, okBytes)
 
 		case bytes.Equal(parts[0], []byte("UNSUB")):
-			// 处理主题订阅（如果需要动态订阅功能）
+			// 处理主题取消订阅（如果需要动态取消订阅功能）
 			topic := string(parts[1])
 			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client unsubscribing from topic:")
 			p.broker.Unsubscribe(client, topic)
 
 			conn.WriteMessage(websocket.BinaryMessage, okBytes)
 		case bytes.Equal(parts[0], []byte("PING")):
-			// 处理主题取消订阅（如果需要动态取消订阅功能）
+			// 响应客户端的 ping
 			p.newLogger().WithField("client_id", client.ID).Println("Received PING from client:")
 			conn.WriteMessage(websocket.BinaryMessage, okBytes)
 
