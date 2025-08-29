@@ -207,7 +207,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				// 客户端通道已关闭
 				p.newLogger().WithField("client_id", client.ID).WithField("topic", msg.Topic).Println("WebSocket client channel closed:")
-				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				p.writeWsMessage(conn, websocket.CloseMessage, []byte{})
 				return
 			}
 
@@ -219,17 +219,15 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			data = []byte(msg.Topic + " " + string(data))
-			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+			if err := p.writeWsMessage(conn, websocket.BinaryMessage, data); err != nil {
 				p.newLogger().WithField("client_id", client.ID).WithField("topic", msg.Topic).Println("Error writing to WebSocket client:", err)
 				return
 			}
 
 		case <-heartbeatTicker.C:
 			// 发送 ping 消息作为心跳
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := p.writeWsMessage(conn, websocket.PingMessage, nil); err != nil {
 				p.newLogger().WithField("client_id", client.ID).Println("Error sending ping to WebSocket client:", err)
 				return
 			}
@@ -257,7 +255,7 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 		case websocket.PingMessage:
 			// 收到 ping，发送 pong 回复
 			p.newLogger().WithField("client_id", client.ID).Println("Received ping, sending pong")
-			if err := conn.WriteMessage(websocket.PongMessage, nil); err != nil {
+			if err := p.writeWsMessage(conn, websocket.PongMessage, nil); err != nil {
 				p.newLogger().WithField("client_id", client.ID).Println("Error sending pong:", err)
 				return
 			}
@@ -307,12 +305,22 @@ func (p *Pushlet) handleWebSocketReads(conn *websocket.Conn, client *Client) {
 			continue
 		}
 
-		if err := conn.WriteMessage(websocket.BinaryMessage, resp); err != nil {
+		if err := p.writeWsMessage(conn, websocket.BinaryMessage, resp); err != nil {
 			p.newLogger().WithField("client_id", client.ID).Println("Error writing to WebSocket client:", err)
 			continue
 		}
 		p.newLogger().WithField("client_id", client.ID).Println("Command executed successfully, response sent to client:")
 	}
+}
+
+func (p *Pushlet) writeWsMessage(conn *websocket.Conn, msgType int, msg []byte) error {
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := conn.WriteMessage(msgType, msg); err != nil {
+		p.newLogger().Println("Error writing to WebSocket client:", err)
+		return err
+	}
+	p.newLogger().Println("Message sent to WebSocket client successfully:")
+	return nil
 }
 
 func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
