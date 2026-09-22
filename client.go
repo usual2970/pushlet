@@ -5,16 +5,18 @@ import (
 	"time"
 )
 
-// Client 表示一个 SSE 客户端连接
+// Client represents one connected SSE or WebSocket subscriber.
 type Client struct {
-	ID   string
+	// ID is a unique connection identifier assigned at creation.
+	ID string
+	// Send receives outbound messages; do not close directly—use [Client.CloseSend].
 	Send chan *Message
 
 	sendMu     sync.Mutex
 	sendClosed bool
 }
 
-// NewClient 创建新的客户端连接
+// NewClient allocates a client with a buffered outbound channel.
 func NewClient() *Client {
 	return &Client{
 		ID:   generateID(),

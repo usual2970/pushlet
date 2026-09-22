@@ -213,4 +213,4 @@ go test -tags=integration ./...
 
 ## 许可证
 
-MIT
+[MIT License](./LICENSE)

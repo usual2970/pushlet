@@ -8,7 +8,8 @@ import (
 	"github.com/usual2970/novaque/driver/mysql"
 )
 
-// Broker 管理客户端连接和消息分发
+// Broker manages topic subscriptions and in-process message delivery.
+// When distributed mode is enabled, cross-node messages arrive via [DistributedConnector].
 type Broker struct {
 	// 按主题组织的客户端映射 - 一个topic可以有多个client
 	topicClients map[string]map[*Client]bool
@@ -51,37 +52,37 @@ type Broker struct {
 	startRelayOnce sync.Once
 }
 
-// ClientRegistration 客户端注册信息
+// ClientRegistration registers a client and its initial topic subscription.
 type ClientRegistration struct {
 	Client *Client
-	Topic  string // 初始订阅的主题
+	Topic  string
 }
 
-// ClientUnregistration 客户端注销信息
+// ClientUnregistration removes a client and all of its topic subscriptions.
 type ClientUnregistration struct {
 	Client *Client
 }
 
-// SubscriptionRequest 订阅请求
+// SubscriptionRequest adds a topic subscription for an existing client.
 type SubscriptionRequest struct {
 	Client *Client
 	Topic  string
 }
 
-// UnsubscriptionRequest 取消订阅请求
+// UnsubscriptionRequest removes a topic subscription for a client.
 type UnsubscriptionRequest struct {
 	Client *Client
 	Topic  string
 }
 
-// PublishMessage 包含发布信息
+// PublishMessage is an internal publish command consumed by the broker loop.
 type PublishMessage struct {
 	Topic   string
 	Message *Message
 	All     bool
 }
 
-// NewBroker 创建一个新的消息代理
+// NewBroker returns a broker that must be started with [Broker.Start].
 func NewBroker() *Broker {
 	return &Broker{
 		topicClients:    make(map[string]map[*Client]bool),
@@ -127,7 +128,7 @@ func (b *Broker) EnableDistributedMode(db *sql.DB, opts DistributedOptions) erro
 	return nil
 }
 
-// Start 启动消息代理
+// Start runs the broker event loop until [Broker.Stop] is called.
 func (b *Broker) Start() {
 	b.mu.Lock()
 	if b.running {
@@ -142,7 +143,7 @@ func (b *Broker) Start() {
 	b.startDistributedRelay()
 }
 
-// Stop 停止消息代理
+// Stop stops the broker loop and shuts down the distributed connector when present.
 func (b *Broker) Stop() {
 	b.mu.Lock()
 	if !b.running {
@@ -170,7 +171,8 @@ func (b *Broker) startDistributedRelay() {
 	})
 }
 
-// Register 注册一个新客户端，并订阅初始主题
+// Register adds a client and subscribes it to topic when topic is non-empty.
+// Returns an error if [Broker.Start] has not been called.
 func (b *Broker) Register(client *Client, topic string) error {
 	b.mu.RLock()
 	running := b.running
@@ -185,14 +187,14 @@ func (b *Broker) Register(client *Client, topic string) error {
 	return nil
 }
 
-// Unregister 注销一个客户端
+// Unregister removes the client from all topics and closes its send channel.
 func (b *Broker) Unregister(client *Client) {
 	b.unregister <- &ClientUnregistration{
 		Client: client,
 	}
 }
 
-// Subscribe 订阅主题
+// Subscribe attaches client to topic asynchronously.
 func (b *Broker) Subscribe(client *Client, topic string) {
 	b.subscribe <- &SubscriptionRequest{
 		Client: client,
@@ -200,7 +202,7 @@ func (b *Broker) Subscribe(client *Client, topic string) {
 	}
 }
 
-// Unsubscribe 取消订阅主题
+// Unsubscribe removes client from topic asynchronously.
 func (b *Broker) Unsubscribe(client *Client, topic string) {
 	b.unsubscribe <- &UnsubscriptionRequest{
 		Client: client,
@@ -208,7 +210,7 @@ func (b *Broker) Unsubscribe(client *Client, topic string) {
 	}
 }
 
-// GetClientTopics 获取客户端订阅的所有主题
+// GetClientTopics returns a snapshot of topics subscribed by client.
 func (b *Broker) GetClientTopics(client *Client) []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -222,7 +224,7 @@ func (b *Broker) GetClientTopics(client *Client) []string {
 	return topics
 }
 
-// GetTopicClients 获取订阅某个主题的所有客户端
+// GetTopicClients returns a snapshot of clients subscribed to topic.
 func (b *Broker) GetTopicClients(topic string) []*Client {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -236,7 +238,7 @@ func (b *Broker) GetTopicClients(topic string) []*Client {
 	return clients
 }
 
-// Publish 向指定主题发布消息
+// Publish delivers msg to local subscribers of topic, or relays when distributed mode is on.
 func (b *Broker) Publish(topic string, msg *Message) error {
 	if b.distributedMode && b.connector != nil {
 		return b.connector.PublishToTopic(topic, msg)
@@ -249,7 +251,7 @@ func (b *Broker) Publish(topic string, msg *Message) error {
 	return nil
 }
 
-// PublishToAll 向所有主题发布消息
+// PublishToAll delivers msg to all local subscribers, or relays a global fan-out when distributed.
 func (b *Broker) PublishToAll(msg *Message) error {
 	if b.distributedMode && b.connector != nil {
 		return b.connector.PublishToAll(msg)

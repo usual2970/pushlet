@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Message 表示一个 SSE 消息
+// Message is the JSON payload streamed to SSE and WebSocket clients.
 type Message struct {
 	Topic     string    `json:"topic"`
 	Event     string    `json:"event"`
@@ -13,7 +13,7 @@ type Message struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// NewMessage 创建一个新的消息
+// NewMessage builds a message with the current timestamp.
 func NewMessage(topic, event, data string) *Message {
 	return &Message{
 		Topic:     topic,
@@ -23,7 +23,7 @@ func NewMessage(topic, event, data string) *Message {
 	}
 }
 
-// String 将消息转换为字符串
+// String returns the JSON encoding of m, or "{}" if marshaling fails.
 func (m *Message) String() string {
 	bytes, err := json.Marshal(m)
 	if err != nil {
@@ -32,7 +32,7 @@ func (m *Message) String() string {
 	return string(bytes)
 }
 
-// FromJSON 从 JSON 字符串创建消息
+// MessageFromJSON parses a message from a JSON object string.
 func MessageFromJSON(jsonStr string) (*Message, error) {
 	var msg Message
 	err := json.Unmarshal([]byte(jsonStr), &msg)

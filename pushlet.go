@@ -13,22 +13,24 @@ import (
 
 var okBytes = []byte("OK")
 
-// Pushlet 是消息推送系统的主要入口点
+// Pushlet is the main entry point for SSE and WebSocket pub/sub.
 type Pushlet struct {
 	broker            *Broker
 	heartbeatInterval time.Duration // 心跳间隔
 	newLogger         NewLogger
 }
 
+// Option configures a [Pushlet] in [New].
 type Option func(*Pushlet)
 
+// WithLogger sets the factory used to create loggers for connection handling.
 func WithLogger(newLogger NewLogger) Option {
 	return func(p *Pushlet) {
 		p.newLogger = newLogger
 	}
 }
 
-// New 创建一个新的 Pushlet 实例
+// New returns a Pushlet with a started-ready broker and default heartbeat interval.
 func New(options ...Option) *Pushlet {
 	p := &Pushlet{
 		broker:            NewBroker(),
@@ -46,7 +48,7 @@ func New(options ...Option) *Pushlet {
 	return p
 }
 
-// SetHeartbeatInterval 设置心跳间隔
+// SetHeartbeatInterval configures SSE comment heartbeats and WebSocket ping intervals.
 func (p *Pushlet) SetHeartbeatInterval(interval time.Duration) {
 	p.heartbeatInterval = interval
 }
@@ -56,18 +58,18 @@ func (p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) err
 	return p.broker.EnableDistributedMode(db, opts)
 }
 
-// Start 启动消息代理
+// Start runs the internal broker and any distributed relay goroutines.
 func (p *Pushlet) Start() {
 	p.broker.Start()
 }
 
-// Stop 停止消息代理
+// Stop shuts down the broker and distributed connector, if enabled.
 func (p *Pushlet) Stop() {
 	p.broker.Stop()
 }
 
-// HandleSSE 处理 SSE 连接请求
-// 路径参数可以用于区分不同的主题
+// HandleSSE serves a long-lived Server-Sent Events stream.
+// The topic is taken from the "topic" query parameter; empty values use "default".
 func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	// 检查请求方法
 	if r.Method != "GET" {
@@ -158,7 +160,8 @@ var upgrader = websocket.Upgrader{
 	EnableCompression: true,
 }
 
-// HandleWebsocket 处理 WebSocket 连接请求
+// HandleWebsocket upgrades the request to a WebSocket and streams JSON [Message] payloads.
+// An optional initial topic may be passed via the "topic" query parameter.
 func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	// 升级 HTTP 连接到 WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -363,12 +366,12 @@ func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
 	}
 }
 
-// Publish 向指定主题发布消息
+// Publish sends an event to all clients subscribed to topic.
 func (p *Pushlet) Publish(topic, event, data string) error {
 	return p.broker.Publish(topic, NewMessage(topic, event, data))
 }
 
-// PublishToAll 向所有主题发布消息
+// PublishToAll broadcasts an event to every connected client regardless of topic.
 func (p *Pushlet) PublishToAll(event, data string) error {
 	return p.broker.PublishToAll(NewMessage("global", event, data))
 }
