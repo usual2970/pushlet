@@ -34,8 +34,8 @@ func main() {
 	addrA := envOr("PUSHLET_ADDR", ":9090")
 	addrB := envOr("PUSHLET_ADDR_B", ":9091")
 
-	runInstance(ctx, db, opts, "A", addrA)
-	runInstance(ctx, db, opts, "B", addrB)
+	runInstance(ctx, db, opts, "A", addrA, envOr("PUSHLET_NOVAQUE_CHANNEL_A", "pushlet-a"))
+	runInstance(ctx, db, opts, "B", addrB, envOr("PUSHLET_NOVAQUE_CHANNEL_B", "pushlet-b"))
 
 	log.Println("Distributed Pushlet (novaque + MySQL) — two instances, one process")
 	log.Printf("  Instance A  http://localhost%s  SSE /events?topic=demo", addrA)
@@ -47,10 +47,13 @@ func main() {
 	log.Println("shutting down")
 }
 
-func runInstance(ctx context.Context, db *sql.DB, opts pushlet.DistributedOptions, name, addr string) {
+func runInstance(ctx context.Context, db *sql.DB, base pushlet.DistributedOptions, name, addr, channel string) {
+	instOpts := base
+	instOpts.Channel = channel
+
 	p := pushlet.New()
 	p.SetHeartbeatInterval(30 * time.Second)
-	if err := p.EnableDistributedMode(db, opts); err != nil {
+	if err := p.EnableDistributedMode(db, instOpts); err != nil {
 		log.Fatalf("instance %s: distributed mode: %v", name, err)
 	}
 	p.Start()

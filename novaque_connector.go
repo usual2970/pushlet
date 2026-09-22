@@ -2,10 +2,7 @@ package pushlet
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log"
-	"os"
 	"sync"
 	"time"
 
@@ -14,12 +11,18 @@ import (
 
 // DistributedOptions configures novaque-backed distributed mode.
 type DistributedOptions struct {
-	Novaque         novaque.Options
-	RelayTopic      string
+	Novaque novaque.Options
+	// Channel is the novaque channel on RelayTopic. Each pushlet instance must use
+	// a distinct channel name so publishes fan out to every instance (multicast).
+	Channel string
+	// RelayTopic is the novaque topic used for cross-node relay (default pushlet-relay).
+	RelayTopic string
+	// RelayPublishTTL is per-message TTL for relay publishes.
 	RelayPublishTTL time.Duration
 }
 
-// DefaultDistributedOptions returns relay-friendly defaults.
+// DefaultDistributedOptions returns relay-friendly defaults without Channel set.
+// Callers must set Channel before EnableDistributedMode.
 func DefaultDistributedOptions() DistributedOptions {
 	return DistributedOptions{
 		RelayTopic:      defaultRelayTopic,
@@ -47,7 +50,10 @@ type NovaqueConnector struct {
 }
 
 // NewNovaqueConnector builds a connector for an opened novaque client.
-func NewNovaqueConnector(client *novaque.Client, opts DistributedOptions) *NovaqueConnector {
+func NewNovaqueConnector(client *novaque.Client, opts DistributedOptions) (*NovaqueConnector, error) {
+	if opts.Channel == "" {
+		return nil, errDistributedNoChannel
+	}
 	relayTopic := opts.RelayTopic
 	if relayTopic == "" {
 		relayTopic = defaultRelayTopic
@@ -59,22 +65,10 @@ func NewNovaqueConnector(client *novaque.Client, opts DistributedOptions) *Novaq
 	return &NovaqueConnector{
 		client:      client,
 		relayTopic:  relayTopic,
-		channelName: "pushlet-node-" + newInstanceID(),
+		channelName: opts.Channel,
 		publishTTL:  ttl,
 		messageChan: make(chan *PublishMessage, 100),
-	}
-}
-
-func newInstanceID() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return hex.EncodeToString([]byte(time.Now().String()))
-	}
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "pushlet"
-	}
-	return host + "-" + hex.EncodeToString(b[:])
+	}, nil
 }
 
 // Start migrates schema, starts the client, and subscribes to the relay topic.

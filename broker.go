@@ -105,12 +105,18 @@ func (b *Broker) EnableDistributedMode(db *sql.DB, opts DistributedOptions) erro
 	if b.distributedMode {
 		return errDistributedAlreadyOn
 	}
+	if opts.Channel == "" {
+		return errDistributedNoChannel
+	}
 
 	client, err := novaque.Open(mysql.New(db), opts.Novaque)
 	if err != nil {
 		return err
 	}
-	connector := NewNovaqueConnector(client, opts)
+	connector, err := NewNovaqueConnector(client, opts)
+	if err != nil {
+		return err
+	}
 	if err := connector.Start(); err != nil {
 		return err
 	}

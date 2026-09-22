@@ -11,18 +11,21 @@ import (
 
 func TestDistributedCrossInstance(t *testing.T) {
 	db := testmysql.Open(t)
-	opts := DefaultDistributedOptions()
-	opts.Novaque.PollInterval = 50 * time.Millisecond
+	optsA := DefaultDistributedOptions()
+	optsA.Novaque.PollInterval = 50 * time.Millisecond
+	optsA.Channel = "test-a"
+	optsB := optsA
+	optsB.Channel = "test-b"
 
 	bA := NewBroker()
-	if err := bA.EnableDistributedMode(db, opts); err != nil {
+	if err := bA.EnableDistributedMode(db, optsA); err != nil {
 		t.Fatal(err)
 	}
 	bA.Start()
 	defer bA.Stop()
 
 	bB := NewBroker()
-	if err := bB.EnableDistributedMode(db, opts); err != nil {
+	if err := bB.EnableDistributedMode(db, optsB); err != nil {
 		t.Fatal(err)
 	}
 	bB.Start()
@@ -52,18 +55,21 @@ func TestDistributedCrossInstance(t *testing.T) {
 
 func TestDistributedPublishToAll(t *testing.T) {
 	db := testmysql.Open(t)
-	opts := DefaultDistributedOptions()
-	opts.Novaque.PollInterval = 50 * time.Millisecond
+	optsA := DefaultDistributedOptions()
+	optsA.Novaque.PollInterval = 50 * time.Millisecond
+	optsA.Channel = "test-a"
+	optsB := optsA
+	optsB.Channel = "test-b"
 
 	bA := NewBroker()
-	if err := bA.EnableDistributedMode(db, opts); err != nil {
+	if err := bA.EnableDistributedMode(db, optsA); err != nil {
 		t.Fatal(err)
 	}
 	bA.Start()
 	defer bA.Stop()
 
 	bB := NewBroker()
-	if err := bB.EnableDistributedMode(db, opts); err != nil {
+	if err := bB.EnableDistributedMode(db, optsB); err != nil {
 		t.Fatal(err)
 	}
 	bB.Start()

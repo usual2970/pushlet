@@ -79,14 +79,25 @@ if err != nil {
 }
 
 p := pushlet.New()
-if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
+opts := pushlet.DefaultDistributedOptions()
+opts.Channel = "pushlet-prod-1" // 每个实例不同，例如 pod 名 / 实例 ID
+if err := p.EnableDistributedMode(db, opts); err != nil {
 	log.Fatal(err)
 }
 p.Start()
 defer p.Stop()
 ```
 
-`DistributedOptions` 可调整 relay 主题名、发布 TTL、以及 `novaque.Options`（租约、轮询间隔等）。默认 relay 主题 `pushlet-relay`，单条 relay 消息 TTL 较短，避免长期堆积。
+`DistributedOptions` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| **`Channel`**（必填） | novaque channel 名，**每个实例必须唯一**，用于多副本 multicast |
+| `RelayTopic` | relay 用的 novaque topic（默认 `pushlet-relay`） |
+| `RelayPublishTTL` | 单条 relay 消息 TTL |
+| `Novaque` | 传给 `novaque.Open` 的选项 |
+
+`DefaultDistributedOptions()` 不会填 `Channel`，启用分布式前必须自行设置。
 
 ### 与 v0.0.11 及更早版本的差异
 
@@ -120,6 +131,7 @@ curl -X POST 'http://localhost:9090/send?topic=demo&message=hello'
 | `PUSHLET_MYSQL_DSN` | 使用已有 MySQL，跳过 testcontainer |
 | `PUSHLET_ADDR` | 实例 A 监听地址（默认 `:9090`） |
 | `PUSHLET_ADDR_B` | 实例 B 监听地址（默认 `:9091`） |
+| `PUSHLET_NOVAQUE_CHANNEL_A` / `_B` | 实例 A/B 的 novaque channel（默认 `pushlet-a` / `pushlet-b`） |
 
 ## 协议说明
 
