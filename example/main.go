@@ -93,7 +93,10 @@ func handleSend(p *pushlet.Pushlet, instance string) http.HandlerFunc {
 			http.Error(w, "message required", http.StatusBadRequest)
 			return
 		}
-		p.Publish(topic, "message", message)
+		if err := p.Publish(topic, "message", message); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
 		fmt.Fprintf(w, "ok instance=%s topic=%s\n", instance, topic)
 	}
 }
@@ -102,7 +105,7 @@ func tickPublish(p *pushlet.Pushlet, instance string) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		p.Publish("default", "time", fmt.Sprintf("%s %s", instance, time.Now().Format(time.RFC3339)))
+		_ = p.Publish("default", "time", fmt.Sprintf("%s %s", instance, time.Now().Format(time.RFC3339)))
 	}
 }
 

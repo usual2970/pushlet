@@ -29,12 +29,16 @@ func TestDistributedCrossInstance(t *testing.T) {
 	defer bB.Stop()
 
 	clientB := NewClient()
-	bB.Register(clientB, "alerts")
+	if err := bB.Register(clientB, "alerts"); err != nil {
+		t.Fatal(err)
+	}
 	defer bB.Unregister(clientB)
 
 	time.Sleep(200 * time.Millisecond)
 
-	bA.Publish("alerts", NewMessage("alerts", "message", "cross"))
+	if err := bA.Publish("alerts", NewMessage("alerts", "message", "cross")); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case msg := <-clientB.Send:
@@ -66,12 +70,16 @@ func TestDistributedPublishToAll(t *testing.T) {
 	defer bB.Stop()
 
 	clientB := NewClient()
-	bB.Register(clientB, "other")
+	if err := bB.Register(clientB, "other"); err != nil {
+		t.Fatal(err)
+	}
 	defer bB.Unregister(clientB)
 
 	time.Sleep(200 * time.Millisecond)
 
-	bA.PublishToAll(NewMessage("global", "broadcast", "all"))
+	if err := bA.PublishToAll(NewMessage("global", "broadcast", "all")); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case msg := <-clientB.Send:

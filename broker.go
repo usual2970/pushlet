@@ -45,6 +45,10 @@ type Broker struct {
 
 	// 是否启用分布式模式
 	distributedMode bool
+
+	relayStop      chan struct{}
+	stopRelayOnce  sync.Once
+	startRelayOnce sync.Once
 }
 
 // ClientRegistration 客户端注册信息
@@ -88,6 +92,7 @@ func NewBroker() *Broker {
 		unsubscribe:     make(chan *UnsubscriptionRequest),
 		publish:         make(chan *PublishMessage),
 		stop:            make(chan struct{}),
+		relayStop:       make(chan struct{}),
 		distributedMode: false,
 	}
 }
@@ -96,6 +101,10 @@ func NewBroker() *Broker {
 func (b *Broker) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	if b.distributedMode {
+		return errDistributedAlreadyOn
+	}
 
 	client, err := novaque.Open(mysql.New(db), opts.Novaque)
 	if err != nil {
@@ -110,7 +119,7 @@ func (b *Broker) EnableDistributedMode(db *sql.DB, opts DistributedOptions) erro
 	b.distributedMode = true
 
 	if b.running {
-		go b.processDistributedMessages()
+		b.startDistributedRelay()
 	}
 
 	return nil
@@ -128,9 +137,7 @@ func (b *Broker) Start() {
 
 	go b.run()
 
-	if b.distributedMode {
-		go b.processDistributedMessages()
-	}
+	b.startDistributedRelay()
 }
 
 // Stop 停止消息代理
@@ -143,6 +150,8 @@ func (b *Broker) Stop() {
 	b.running = false
 	b.mu.Unlock()
 
+	b.stopRelayOnce.Do(func() { close(b.relayStop) })
+
 	if b.distributedMode && b.connector != nil {
 		b.connector.Stop()
 	}
@@ -150,12 +159,28 @@ func (b *Broker) Stop() {
 	b.stop <- struct{}{}
 }
 
+func (b *Broker) startDistributedRelay() {
+	if !b.distributedMode || b.connector == nil {
+		return
+	}
+	b.startRelayOnce.Do(func() {
+		go b.processDistributedMessages()
+	})
+}
+
 // Register 注册一个新客户端，并订阅初始主题
-func (b *Broker) Register(client *Client, topic string) {
+func (b *Broker) Register(client *Client, topic string) error {
+	b.mu.RLock()
+	running := b.running
+	b.mu.RUnlock()
+	if !running {
+		return errBrokerNotRunning
+	}
 	b.register <- &ClientRegistration{
 		Client: client,
-		Topic:  topic, // 使用客户端的初始主题
+		Topic:  topic,
 	}
+	return nil
 }
 
 // Unregister 注销一个客户端
@@ -210,30 +235,28 @@ func (b *Broker) GetTopicClients(topic string) []*Client {
 }
 
 // Publish 向指定主题发布消息
-func (b *Broker) Publish(topic string, msg *Message) {
+func (b *Broker) Publish(topic string, msg *Message) error {
 	if b.distributedMode && b.connector != nil {
-		b.connector.PublishToTopic(topic, msg)
-	} else {
-		// 本地发布
-		b.publish <- &PublishMessage{
-			Topic:   topic,
-			Message: msg,
-			All:     false,
-		}
+		return b.connector.PublishToTopic(topic, msg)
 	}
+	b.publish <- &PublishMessage{
+		Topic:   topic,
+		Message: msg,
+		All:     false,
+	}
+	return nil
 }
 
 // PublishToAll 向所有主题发布消息
-func (b *Broker) PublishToAll(msg *Message) {
+func (b *Broker) PublishToAll(msg *Message) error {
 	if b.distributedMode && b.connector != nil {
-		b.connector.PublishToAll(msg)
-	} else {
-		// 本地发布
-		b.publish <- &PublishMessage{
-			Message: msg,
-			All:     true,
-		}
+		return b.connector.PublishToAll(msg)
 	}
+	b.publish <- &PublishMessage{
+		Message: msg,
+		All:     true,
+	}
+	return nil
 }
 
 func (b *Broker) processDistributedMessages() {
@@ -241,8 +264,20 @@ func (b *Broker) processDistributedMessages() {
 		return
 	}
 
-	for msg := range b.connector.Messages() {
-		b.publish <- msg
+	for {
+		select {
+		case <-b.relayStop:
+			return
+		case msg, ok := <-b.connector.Messages():
+			if !ok {
+				return
+			}
+			select {
+			case b.publish <- msg:
+			case <-b.relayStop:
+				return
+			}
+		}
 	}
 }
 
@@ -357,22 +392,32 @@ func (b *Broker) unsubscribeClientFromTopicUnsafe(client *Client, topic string) 
 // publishMessage 发布消息
 func (b *Broker) publishMessage(pm *PublishMessage) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
+	var dropped []*Client
 
 	if pm.All {
-		// 发送给所有主题的所有客户端
 		for _, clients := range b.topicClients {
 			for client := range clients {
-				client.SendMessage(pm.Message)
+				if !client.SendMessage(pm.Message) {
+					dropped = append(dropped, client)
+				}
 			}
 		}
-	} else {
-		// 发送给特定主题的客户端
-		if clients, ok := b.topicClients[pm.Topic]; ok {
-			for client := range clients {
-				client.SendMessage(pm.Message)
+	} else if clients, ok := b.topicClients[pm.Topic]; ok {
+		for client := range clients {
+			if !client.SendMessage(pm.Message) {
+				dropped = append(dropped, client)
 			}
 		}
+	}
+	b.mu.RUnlock()
+
+	seen := make(map[*Client]struct{}, len(dropped))
+	for _, client := range dropped {
+		if _, dup := seen[client]; dup {
+			continue
+		}
+		seen[client] = struct{}{}
+		go b.Unregister(client)
 	}
 }
 

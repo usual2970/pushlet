@@ -92,8 +92,10 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	client := NewClient()
 	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("New client requested connection")
 
-	// 注册客户端到代理
-	p.broker.Register(client, topic)
+	if err := p.broker.Register(client, topic); err != nil {
+		http.Error(w, "broker not ready", http.StatusServiceUnavailable)
+		return
+	}
 	defer p.broker.Unregister(client)
 
 	// 通知客户端连接已建立
@@ -176,8 +178,10 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	client := NewClient()
 	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("New WebSocket client requested connection:")
 
-	// 注册客户端到代理
-	p.broker.Register(client, topic)
+	if err := p.broker.Register(client, topic); err != nil {
+		http.Error(w, "broker not ready", http.StatusServiceUnavailable)
+		return
+	}
 	defer p.broker.Unregister(client)
 
 	// 设置连接参数
@@ -206,8 +210,7 @@ func (p *Pushlet) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		select {
 		case msg, ok := <-client.Send:
 			if !ok {
-				// 客户端通道已关闭
-				p.newLogger().WithField("client_id", client.ID).WithField("topic", msg.Topic).Println("WebSocket client channel closed:")
+				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("WebSocket client channel closed:")
 				p.writeWsMessage(conn, websocket.CloseMessage, []byte{})
 				return
 			}
@@ -361,11 +364,11 @@ func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
 }
 
 // Publish 向指定主题发布消息
-func (p *Pushlet) Publish(topic, event, data string) {
-	p.broker.Publish(topic, NewMessage(topic, event, data))
+func (p *Pushlet) Publish(topic, event, data string) error {
+	return p.broker.Publish(topic, NewMessage(topic, event, data))
 }
 
 // PublishToAll 向所有主题发布消息
-func (p *Pushlet) PublishToAll(event, data string) {
-	p.broker.PublishToAll(NewMessage("global", event, data))
+func (p *Pushlet) PublishToAll(event, data string) error {
+	return p.broker.PublishToAll(NewMessage("global", event, data))
 }

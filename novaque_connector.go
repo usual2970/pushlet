@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -97,6 +98,7 @@ func (nc *NovaqueConnector) Start() error {
 	cons, err := nc.client.SubscribeAndStart(ctx, nc.relayTopic, nc.channelName, func(_ context.Context, msg *novaque.Message) error {
 		pm, err := decodeRelayEnvelope(msg.Body)
 		if err != nil {
+			log.Printf("pushlet: drop invalid relay envelope on %s/%s: %v", nc.relayTopic, nc.channelName, err)
 			return nil
 		}
 		select {
