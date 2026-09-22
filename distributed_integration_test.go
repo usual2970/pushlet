@@ -3,30 +3,14 @@
 package pushlet
 
 import (
-	"database/sql"
-	"os"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/usual2970/pushlet/internal/testmysql"
 )
 
-func openTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	dsn := os.Getenv("PUSHLET_TEST_MYSQL_DSN")
-	if dsn == "" {
-		t.Skip("PUSHLET_TEST_MYSQL_DSN not set")
-	}
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
-
 func TestDistributedCrossInstance(t *testing.T) {
-	db := openTestDB(t)
+	db := testmysql.Open(t)
 	opts := DefaultDistributedOptions()
 	opts.Novaque.PollInterval = 50 * time.Millisecond
 
@@ -63,7 +47,7 @@ func TestDistributedCrossInstance(t *testing.T) {
 }
 
 func TestDistributedPublishToAll(t *testing.T) {
-	db := openTestDB(t)
+	db := testmysql.Open(t)
 	opts := DefaultDistributedOptions()
 	opts.Novaque.PollInterval = 50 * time.Millisecond
 
@@ -97,5 +81,4 @@ func TestDistributedPublishToAll(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for broadcast")
 	}
-
 }
