@@ -1,7 +1,11 @@
 package pushlet
 
 import (
+	"database/sql"
 	"sync"
+
+	"github.com/usual2970/novaque"
+	"github.com/usual2970/novaque/driver/mysql"
 )
 
 // Broker 管理客户端连接和消息分发
@@ -27,8 +31,8 @@ type Broker struct {
 	// 发布消息的通道
 	publish chan *PublishMessage
 
-	// Redis连接器，用于分布式支持
-	redisConnector *RedisConnector
+	// connector carries cross-node pub/sub when distributed mode is enabled.
+	connector DistributedConnector
 
 	// 确保线程安全
 	mu sync.RWMutex
@@ -88,22 +92,25 @@ func NewBroker() *Broker {
 	}
 }
 
-// EnableDistributedMode 启用分布式模式
-func (b *Broker) EnableDistributedMode(redisAddr, redisPassword string, redisDB int) error {
+// EnableDistributedMode enables cross-node delivery via embedded novaque (MySQL).
+func (b *Broker) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.redisConnector = NewRedisConnector(redisAddr, redisPassword, redisDB)
-	err := b.redisConnector.Start()
+	client, err := novaque.Open(mysql.New(db), opts.Novaque)
 	if err != nil {
 		return err
 	}
+	connector := NewNovaqueConnector(client, opts)
+	if err := connector.Start(); err != nil {
+		return err
+	}
 
+	b.connector = connector
 	b.distributedMode = true
 
-	// 如果broker已经在运行，则开始处理redis消息
 	if b.running {
-		go b.processRedisMessages()
+		go b.processDistributedMessages()
 	}
 
 	return nil
@@ -121,9 +128,8 @@ func (b *Broker) Start() {
 
 	go b.run()
 
-	// 如果启用了分布式模式，启动Redis消息处理
 	if b.distributedMode {
-		go b.processRedisMessages()
+		go b.processDistributedMessages()
 	}
 }
 
@@ -137,9 +143,8 @@ func (b *Broker) Stop() {
 	b.running = false
 	b.mu.Unlock()
 
-	// 停止Redis连接器
-	if b.distributedMode && b.redisConnector != nil {
-		b.redisConnector.Stop()
+	if b.distributedMode && b.connector != nil {
+		b.connector.Stop()
 	}
 
 	b.stop <- struct{}{}
@@ -206,9 +211,8 @@ func (b *Broker) GetTopicClients(topic string) []*Client {
 
 // Publish 向指定主题发布消息
 func (b *Broker) Publish(topic string, msg *Message) {
-	// 在分布式模式下，通过Redis发布
-	if b.distributedMode && b.redisConnector != nil {
-		b.redisConnector.PublishToTopic(topic, msg)
+	if b.distributedMode && b.connector != nil {
+		b.connector.PublishToTopic(topic, msg)
 	} else {
 		// 本地发布
 		b.publish <- &PublishMessage{
@@ -221,9 +225,8 @@ func (b *Broker) Publish(topic string, msg *Message) {
 
 // PublishToAll 向所有主题发布消息
 func (b *Broker) PublishToAll(msg *Message) {
-	// 在分布式模式下，通过Redis发布
-	if b.distributedMode && b.redisConnector != nil {
-		b.redisConnector.PublishToAll(msg)
+	if b.distributedMode && b.connector != nil {
+		b.connector.PublishToAll(msg)
 	} else {
 		// 本地发布
 		b.publish <- &PublishMessage{
@@ -233,16 +236,12 @@ func (b *Broker) PublishToAll(msg *Message) {
 	}
 }
 
-// processRedisMessages 处理从Redis接收的消息
-func (b *Broker) processRedisMessages() {
-	if !b.distributedMode || b.redisConnector == nil {
+func (b *Broker) processDistributedMessages() {
+	if !b.distributedMode || b.connector == nil {
 		return
 	}
 
-	messageChan := b.redisConnector.GetMessageChannel()
-
-	for msg := range messageChan {
-		// 将Redis消息转发到本地客户端
+	for msg := range b.connector.Messages() {
 		b.publish <- msg
 	}
 }
@@ -329,10 +328,6 @@ func (b *Broker) subscribeClientToTopicUnsafe(client *Client, topic string) {
 	}
 	b.clientTopics[client][topic] = true
 
-	// 在分布式模式下，订阅Redis中的主题
-	if b.distributedMode && b.redisConnector != nil {
-		b.redisConnector.SubscribeTopic(topic)
-	}
 }
 
 // unsubscribeClientFromTopic 取消客户端对主题的订阅
@@ -351,10 +346,6 @@ func (b *Broker) unsubscribeClientFromTopicUnsafe(client *Client, topic string) 
 		// 如果该主题下没有客户端了，删除主题
 		if len(clients) == 0 {
 			delete(b.topicClients, topic)
-			// 在分布式模式下，取消订阅Redis中的主题
-			if b.distributedMode && b.redisConnector != nil {
-				b.redisConnector.UnsubscribeTopic(topic)
-			}
 		}
 	}
 

@@ -2,6 +2,7 @@ package pushlet
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -50,9 +51,9 @@ func (p *Pushlet) SetHeartbeatInterval(interval time.Duration) {
 	p.heartbeatInterval = interval
 }
 
-// EnableDistributedMode 启用分布式模式
-func (p *Pushlet) EnableDistributedMode(redisAddr, redisPassword string, redisDB int) error {
-	return p.broker.EnableDistributedMode(redisAddr, redisPassword, redisDB)
+// EnableDistributedMode enables multi-instance fan-out via novaque (MySQL-backed).
+func (p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error {
+	return p.broker.EnableDistributedMode(db, opts)
 }
 
 // Start 启动消息代理

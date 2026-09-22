@@ -1,29 +1,39 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/usual2970/pushlet"
 )
 
 func main() {
-	// 创建 Pushlet 实例
 	p := pushlet.New()
-	p.EnableDistributedMode("localhost:6379", "password", 0) // 启用分布式模式，连接到本地 Redis 实例
 
-	// 启动消息代理
+	if dsn := os.Getenv("PUSHLET_MYSQL_DSN"); dsn != "" {
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			log.Fatalf("mysql open: %v", err)
+		}
+		db.SetMaxOpenConns(16)
+		if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
+			log.Fatalf("distributed mode: %v", err)
+		}
+		log.Println("Distributed mode enabled (novaque + MySQL)")
+	}
+
 	p.Start()
 	defer p.Stop()
 
-	// 处理 SSE 连接请求
 	http.HandleFunc("/events", p.HandleSSE)
-
 	http.HandleFunc("/ws", p.HandleWebsocket)
 
-	// 处理发送消息的请求
 	http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -41,13 +51,10 @@ func main() {
 			return
 		}
 
-		// 发布消息
 		p.Publish(topic, "message", message)
-
 		fmt.Fprintf(w, "Message sent to topic %s", topic)
 	})
 
-	// 每5秒向默认主题发送时间更新
 	go func() {
 		for {
 			time.Sleep(5 * time.Second)
@@ -56,7 +63,6 @@ func main() {
 		}
 	}()
 
-	// 启动服务器
 	log.Println("Server started at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

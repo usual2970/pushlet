@@ -1,0 +1,170 @@
+package pushlet
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/usual2970/novaque"
+)
+
+// DistributedOptions configures novaque-backed distributed mode.
+type DistributedOptions struct {
+	Novaque         novaque.Options
+	RelayTopic      string
+	RelayPublishTTL time.Duration
+}
+
+// DefaultDistributedOptions returns relay-friendly defaults.
+func DefaultDistributedOptions() DistributedOptions {
+	return DistributedOptions{
+		RelayTopic:      defaultRelayTopic,
+		RelayPublishTTL: 5 * time.Minute,
+		Novaque: novaque.Options{
+			DefaultTTL: time.Minute,
+		},
+	}
+}
+
+// NovaqueConnector implements DistributedConnector using embedded novaque.
+type NovaqueConnector struct {
+	client      *novaque.Client
+	consumer    *novaque.Consumer
+	relayTopic  string
+	channelName string
+	publishTTL  time.Duration
+
+	messageChan chan *PublishMessage
+	ctx         context.Context
+	cancel      context.CancelFunc
+
+	mu      sync.Mutex
+	running bool
+}
+
+// NewNovaqueConnector builds a connector for an opened novaque client.
+func NewNovaqueConnector(client *novaque.Client, opts DistributedOptions) *NovaqueConnector {
+	relayTopic := opts.RelayTopic
+	if relayTopic == "" {
+		relayTopic = defaultRelayTopic
+	}
+	ttl := opts.RelayPublishTTL
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	return &NovaqueConnector{
+		client:      client,
+		relayTopic:  relayTopic,
+		channelName: "pushlet-node-" + newInstanceID(),
+		publishTTL:  ttl,
+		messageChan: make(chan *PublishMessage, 100),
+	}
+}
+
+func newInstanceID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return hex.EncodeToString([]byte(time.Now().String()))
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "pushlet"
+	}
+	return host + "-" + hex.EncodeToString(b[:])
+}
+
+// Start migrates schema, starts the client, and subscribes to the relay topic.
+func (nc *NovaqueConnector) Start() error {
+	nc.mu.Lock()
+	if nc.running {
+		nc.mu.Unlock()
+		return nil
+	}
+	nc.ctx, nc.cancel = context.WithCancel(context.Background())
+	nc.mu.Unlock()
+
+	ctx := nc.ctx
+	if err := nc.client.Migrate(ctx); err != nil {
+		return err
+	}
+	if err := nc.client.Start(ctx); err != nil {
+		return err
+	}
+
+	cons, err := nc.client.SubscribeAndStart(ctx, nc.relayTopic, nc.channelName, func(_ context.Context, msg *novaque.Message) error {
+		pm, err := decodeRelayEnvelope(msg.Body)
+		if err != nil {
+			return nil
+		}
+		select {
+		case nc.messageChan <- pm:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	})
+	if err != nil {
+		_ = nc.client.Shutdown(context.Background())
+		return err
+	}
+
+	nc.mu.Lock()
+	nc.consumer = cons
+	nc.running = true
+	nc.mu.Unlock()
+	return nil
+}
+
+// Stop shuts down the consumer and novaque client.
+func (nc *NovaqueConnector) Stop() {
+	nc.mu.Lock()
+	if !nc.running {
+		nc.mu.Unlock()
+		return
+	}
+	nc.running = false
+	cons := nc.consumer
+	cancel := nc.cancel
+	nc.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if cons != nil {
+		_ = cons.Shutdown(context.Background())
+	}
+	_ = nc.client.Shutdown(context.Background())
+}
+
+// PublishToTopic publishes a topic-scoped message to the relay.
+func (nc *NovaqueConnector) PublishToTopic(topic string, msg *Message) error {
+	return nc.publish(topic, false, msg)
+}
+
+// PublishToAll publishes a global fan-out message to the relay.
+func (nc *NovaqueConnector) PublishToAll(msg *Message) error {
+	return nc.publish("", true, msg)
+}
+
+func (nc *NovaqueConnector) publish(topic string, all bool, msg *Message) error {
+	nc.mu.Lock()
+	running := nc.running
+	nc.mu.Unlock()
+	if !running {
+		return errConnectorNotRunning
+	}
+	body, err := encodeRelayEnvelope(topic, all, msg)
+	if err != nil {
+		return err
+	}
+	_, err = nc.client.Publish(nc.ctx, nc.relayTopic, body, novaque.PublishOpts{TTL: nc.publishTTL})
+	return err
+}
+
+// Messages returns the channel of decoded relay messages.
+func (nc *NovaqueConnector) Messages() <-chan *PublishMessage {
+	return nc.messageChan
+}

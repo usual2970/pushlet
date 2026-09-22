@@ -1,6 +1,6 @@
 # Pushlet - 轻量级实时消息推送库
 
-![Go Version](https://img.shields.io/badge/Go-1.24+-blue.svg)
+![Go Version](https://img.shields.io/badge/Go-1.26.5+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Version](https://img.shields.io/badge/Version-v0.0.7-orange.svg)
 
@@ -10,7 +10,7 @@ Pushlet 是一个基于 Go 语言的轻量级实时消息推送库，同时支�
 
 - 🚀 **双协议支持** - 同时支持 SSE 和 WebSocket 协议
 - 📡 **多主题订阅** - 支持基于主题的消息订阅和发布
-- 🌐 **分布式架构** - 通过 Redis 实现多实例间的消息同步
+- 🌐 **分布式架构** - 通过 [novaque](https://github.com/usual2970/novaque)（MySQL）实现多实例间的消息同步
 - 💪 **动态订阅** - WebSocket 客户端可通过消息动态订阅/取消订阅主题
 - 🔒 **二进制传输** - WebSocket 使用二进制格式传输，提高效率
 - ❤️ **心跳保活** - 自动发送心跳消息保持连接活跃
@@ -80,44 +80,46 @@ func main() {
 
 ### 分布式部署
 
+需要 **Go 1.26.5+**、**MySQL 8.0.1+**，以及可共享的 MySQL 数据库。分布式投递为 **至少一次**（at-least-once），客户端应容忍重复事件。
+
 ```go
 package main
 
 import (
+    "database/sql"
     "log"
     "net/http"
 
+    _ "github.com/go-sql-driver/mysql"
     "github.com/usual2970/pushlet"
 )
 
 func main() {
-    // 创建 Pushlet 实例
     p := pushlet.New()
-    
-    // 启用分布式模式
-    err := p.EnableDistributedMode("localhost:6379", "", 0)
+
+    db, err := sql.Open("mysql", "user:pass@tcp(127.0.0.1:3306)/app?parseTime=true&loc=UTC")
     if err != nil {
+        log.Fatal(err)
+    }
+    if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
         log.Fatalf("Failed to enable distributed mode: %v", err)
     }
-    
-    // 启动消息代理
+
     p.Start()
     defer p.Stop()
 
-    // 处理连接请求
-    http.HandleFunc("/events", p.HandleSSE)      // SSE
-    http.HandleFunc("/ws", p.HandleWebSocket)    // WebSocket
-    
-    // 消息发送接口
+    http.HandleFunc("/events", p.HandleSSE)
+    http.HandleFunc("/ws", p.HandleWebSocket)
+
     http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
         topic := r.URL.Query().Get("topic")
         if topic == "" {
             topic = "default"
         }
-        
+
         message := r.URL.Query().Get("message")
         p.Publish(topic, "message", message)
-        
+
         w.Write([]byte("Message sent to all instances"))
     })
 
@@ -296,8 +298,8 @@ func main() {
 #### `(p *Pushlet) Stop()`
 停止消息代理，关闭所有连接。
 
-#### `(p *Pushlet) EnableDistributedMode(redisAddr, redisPassword string, redisDB int) error`
-启用分布式模式，通过 Redis 同步消息。
+#### `(p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`
+启用分布式模式，通过嵌入的 novaque 客户端将消息写入 MySQL 并在实例间同步（**破坏性变更**：不再支持 Redis 地址参数）。
 
 #### `(p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request)`
 处理 SSE 连接请求，支持通过 `topic` 查询参数指定主题。
@@ -364,7 +366,7 @@ pushlet/
 ├── logger.go          # 日志系统
 ├── message.go         # 消息结构定义
 ├── pushlet.go         # 主要 API 入口
-├── redis_connector.go # Redis 分布式支持
+├── novaque_connector.go # novaque 分布式支持
 ├── go.mod            # Go 模块定义
 └── example/          # 使用示例
     └── dual_protocol.go
@@ -395,7 +397,7 @@ pushlet/
 
 ### 分布式部署
 
-- 生产环境建议使用 Redis 集群
+- 生产环境使用高可用 MySQL，并确保各实例在发布前已启动分布式模式（novaque 按 channel 快照 fan-out）
 - 设置合适的心跳间隔（建议 30-60 秒）
 - 考虑负载均衡和故障转移
 
@@ -457,17 +459,14 @@ func main() {
 	// 创建 Pushlet 实例
 	p := pushlet.New()
 	
-	// 启用分布式模式
-	err := p.EnableDistributedMode("localhost:6379", "", 0)
-	if err != nil {
+	db, _ := sql.Open("mysql", os.Getenv("PUSHLET_MYSQL_DSN"))
+	if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
 		log.Fatalf("Failed to enable distributed mode: %v", err)
 	}
-	
-	// 启动消息代理
+
 	p.Start()
 	defer p.Stop()
 
-	// 处理 SSE 连接请求
 	http.HandleFunc("/events", p.HandleSSE)
 	
 	// 消息发送接口
@@ -544,8 +543,8 @@ func main() {
 #### `(p *Pushlet) Stop()`
 停止消息代理，关闭所有连接。
 
-#### `(p *Pushlet) EnableDistributedMode(redisAddr, redisPassword string, redisDB int) error`
-启用分布式模式，通过 Redis 同步消息。
+#### `(p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`
+启用分布式模式，通过嵌入的 novaque 客户端将消息写入 MySQL 并在实例间同步（**破坏性变更**：不再支持 Redis 地址参数）。
 
 #### `(p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request)`
 处理 SSE 连接请求，建立实时消息通道。
@@ -584,8 +583,7 @@ p.Publish("users/123/notifications", "new-message", "你有一条新消息")
 对于高并发场景，建议使用分布式模式并结合负载均衡：
 
 ```go
-// 启用分布式模式
-p.EnableDistributedMode("redis-server:6379", "password", 0)
+p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions())
 
 // 增加缓冲区大小以处理更多连接
 http.ListenAndServe(":8080", nil)
