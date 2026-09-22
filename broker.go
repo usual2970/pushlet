@@ -302,8 +302,7 @@ func (b *Broker) unregisterClient(client *Client) {
 		delete(b.clientTopics, client)
 	}
 
-	// 关闭客户端发送通道
-	close(client.Send)
+	client.CloseSend()
 }
 
 // subscribeClientToTopic 订阅客户端到主题
@@ -382,9 +381,8 @@ func (b *Broker) cleanup() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// 关闭所有客户端连接
 	for client := range b.clientTopics {
-		close(client.Send)
+		client.CloseSend()
 	}
 
 	// 清空所有映射

@@ -1,11 +1,16 @@
 package pushlet
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Client 表示一个 SSE 客户端连接
 type Client struct {
 	ID   string
 	Send chan *Message
+
+	closeSend sync.Once
 }
 
 // NewClient 创建新的客户端连接
@@ -16,15 +21,20 @@ func NewClient() *Client {
 	}
 }
 
+// CloseSend closes the outbound channel at most once.
+func (c *Client) CloseSend() {
+	c.closeSend.Do(func() {
+		close(c.Send)
+	})
+}
+
 // SendMessage 向客户端发送消息
 func (c *Client) SendMessage(msg *Message) {
 	select {
 	case c.Send <- msg:
-		// 成功发送消息
 	default:
-		// 通道已满，可能客户端处理过慢
-		// 关闭并清理此客户端
-		close(c.Send)
+		// 通道已满，可能客户端处理过慢；幂等关闭，避免 Unregister/cleanup 再次 close panic
+		c.CloseSend()
 	}
 }
 
