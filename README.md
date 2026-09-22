@@ -1,449 +1,24 @@
-# Pushlet - 轻量级实时消息推送库
+# Pushlet
+
+轻量级 Go 实时推送库，支持 **SSE** 与 **WebSocket**。单机模式下进程内转发；分布式模式下通过嵌入 [novaque](https://github.com/usual2970/novaque) 与共享 **MySQL** 在多个实例间同步消息。
 
 ![Go Version](https://img.shields.io/badge/Go-1.26.5+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Version](https://img.shields.io/badge/Version-v0.0.7-orange.svg)
 
-Pushlet 是一个基于 Go 语言的轻量级实时消息推送库，同时支持 **Server-Sent Events (SSE)** 和 **WebSocket** 两种协议。它支持单机和分布式部署模式，是构建实时通知、事件流和数据更新等功能的理想选择。
+## 要求
 
-## ✨ 核心特性
+| 模式 | 依赖 |
+|------|------|
+| 单机 | Go 1.26.5+ |
+| 分布式 | 上述 + MySQL 8.0.1+（InnoDB）、可共享的数据库 |
 
-- 🚀 **双协议支持** - 同时支持 SSE 和 WebSocket 协议
-- 📡 **多主题订阅** - 支持基于主题的消息订阅和发布
-- 🌐 **分布式架构** - 通过 [novaque](https://github.com/usual2970/novaque)（MySQL）实现多实例间的消息同步
-- 💪 **动态订阅** - WebSocket 客户端可通过消息动态订阅/取消订阅主题
-- 🔒 **二进制传输** - WebSocket 使用二进制格式传输，提高效率
-- ❤️ **心跳保活** - 自动发送心跳消息保持连接活跃
-- 🔧 **简单易用** - 简洁的 API 设计，易于集成到现有项目
-- ⚡ **低延迟** - 消息实时推送，适合需要即时反馈的场景
-- 🛡️ **高可靠** - 断线自动重连，消息不丢失
-- 📊 **可观测** - 内置日志系统，支持自定义日志记录器
-
-## 📦 安装
+## 安装
 
 ```bash
-go get github.com/usual2970/pushlet
+go get github.com/usual2970/pushlet@v0.0.14
 ```
 
-## 🚀 快速开始
-
-### 基本用法
-
-```go
-package main
-
-import (
-    "log"
-    "net/http"
-    "time"
-
-    "github.com/usual2970/pushlet"
-)
-
-func main() {
-    // 创建 Pushlet 实例
-    p := pushlet.New()
-    
-    // 设置心跳间隔
-    p.SetHeartbeatInterval(30 * time.Second)
-    
-    // 启动消息代理
-    p.Start()
-    defer p.Stop()
-
-    // SSE 端点
-    http.HandleFunc("/events", p.HandleSSE)
-    
-    // WebSocket 端点
-    http.HandleFunc("/ws", p.HandleWebSocket)
-    
-    // 消息发送接口
-    http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
-        topic := r.URL.Query().Get("topic")
-        if topic == "" {
-            topic = "default"
-        }
-        
-        message := r.URL.Query().Get("message")
-        // 同时发送到 SSE 和 WebSocket 客户端
-        p.Publish(topic, "message", message)
-        
-        w.Write([]byte("Message sent"))
-    })
-
-    log.Println("Server started at http://localhost:8080")
-    log.Println("SSE endpoint: http://localhost:8080/events")
-    log.Println("WebSocket endpoint: ws://localhost:8080/ws")
-    log.Fatal(http.ListenAndServe(":8080", nil))
-}
-```
-
-### 分布式部署
-
-需要 **Go 1.26.5+**、**MySQL 8.0.1+**，以及可共享的 MySQL 数据库。分布式投递为 **至少一次**（at-least-once），客户端应容忍重复事件。
-
-```go
-package main
-
-import (
-    "database/sql"
-    "log"
-    "net/http"
-
-    _ "github.com/go-sql-driver/mysql"
-    "github.com/usual2970/pushlet"
-)
-
-func main() {
-    p := pushlet.New()
-
-    db, err := sql.Open("mysql", "user:pass@tcp(127.0.0.1:3306)/app?parseTime=true&loc=UTC")
-    if err != nil {
-        log.Fatal(err)
-    }
-    if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
-        log.Fatalf("Failed to enable distributed mode: %v", err)
-    }
-
-    p.Start()
-    defer p.Stop()
-
-    http.HandleFunc("/events", p.HandleSSE)
-    http.HandleFunc("/ws", p.HandleWebSocket)
-
-    http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
-        topic := r.URL.Query().Get("topic")
-        if topic == "" {
-            topic = "default"
-        }
-
-        message := r.URL.Query().Get("message")
-        p.Publish(topic, "message", message)
-
-        w.Write([]byte("Message sent to all instances"))
-    })
-
-    log.Println("Distributed server started at http://localhost:8080")
-    log.Fatal(http.ListenAndServe(":8080", nil))
-}
-```
-
-## 📋 协议对比
-
-| 特性 | SSE | WebSocket |
-|------|-----|-----------|
-| 传输方向 | 单向（服务器到客户端） | 双向 |
-| 数据格式 | 文本（事件流） | 二进制 JSON |
-| 订阅方式 | URL 参数指定主题 | 消息动态订阅 |
-| 浏览器支持 | 现代浏览器原生支持 | 现代浏览器原生支持 |
-| 连接开销 | 低 | 低 |
-| 协议复杂度 | 简单 | 中等 |
-| 断线重连 | 浏览器自动处理 | 需要手动处理 |
-| 多主题支持 | 一个连接一个主题 | 一个连接多个主题 |
-
-## 💻 客户端使用
-
-### SSE 客户端
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>SSE 客户端</title>
-</head>
-<body>
-    <div id="messages"></div>
-
-    <script>
-        // 连接到特定主题
-        const evtSource = new EventSource("/events?topic=my-topic");
-        
-        evtSource.addEventListener("message", function(e) {
-            const div = document.createElement("div");
-            div.textContent = `SSE 消息: ${e.data}`;
-            document.getElementById("messages").appendChild(div);
-        });
-        
-        evtSource.onerror = function() {
-            console.log("SSE 连接错误，正在重新连接...");
-        };
-    </script>
-</body>
-</html>
-```
-
-### WebSocket 客户端（动态订阅）
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>WebSocket 动态订阅客户端</title>
-</head>
-<body>
-    <div id="messages"></div>
-    <button onclick="subscribe('topic1')">订阅 topic1</button>
-    <button onclick="unsubscribe('topic1')">取消订阅 topic1</button>
-
-    <script>
-        const ws = new WebSocket("ws://localhost:8080/ws");
-        
-        ws.onmessage = function(event) {
-            if (event.data instanceof Blob) {
-                // 处理二进制数据
-                event.data.arrayBuffer().then(buffer => {
-                    const decoder = new TextDecoder();
-                    const jsonText = decoder.decode(buffer);
-                    const msg = JSON.parse(jsonText);
-                    
-                    const div = document.createElement("div");
-                    div.textContent = `[${msg.event}] ${msg.data}`;
-                    document.getElementById("messages").appendChild(div);
-                });
-            }
-        };
-        
-        function subscribe(topic) {
-            ws.send(JSON.stringify({
-                action: 'subscribe',
-                topic: topic
-            }));
-        }
-        
-        function unsubscribe(topic) {
-            ws.send(JSON.stringify({
-                action: 'unsubscribe', 
-                topic: topic
-            }));
-        }
-    </script>
-</body>
-</html>
-```
-
-### Go WebSocket 客户端
-
-```go
-package main
-
-import (
-    "encoding/json"
-    "log"
-    "net/url"
-
-    "github.com/gorilla/websocket"
-)
-
-type Message struct {
-    Event     string    `json:"event"`
-    Data      string    `json:"data"`
-    Timestamp time.Time `json:"timestamp"`
-}
-
-type SubscriptionMessage struct {
-    Action string `json:"action"` // "subscribe" 或 "unsubscribe"
-    Topic  string `json:"topic"`
-}
-
-func main() {
-    u := url.URL{Scheme: "ws", Host: "localhost:8080", Path: "/ws"}
-
-    c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-    if err != nil {
-        log.Fatal("连接失败:", err)
-    }
-    defer c.Close()
-
-    // 订阅主题
-    subMsg := SubscriptionMessage{
-        Action: "subscribe",
-        Topic:  "my-topic",
-    }
-    c.WriteJSON(subMsg)
-
-    for {
-        msgType, message, err := c.ReadMessage()
-        if err != nil {
-            log.Println("读取消息出错:", err)
-            break
-        }
-
-        if msgType == websocket.BinaryMessage {
-            // 处理二进制消息
-            var msg Message
-            if err := json.Unmarshal(message, &msg); err == nil {
-                log.Printf("[%s] %s", msg.Event, msg.Data)
-            }
-        }
-    }
-}
-```
-
-## 🔧 API 参考
-
-### 核心方法
-
-#### `New(options ...Option) *Pushlet`
-创建一个新的 Pushlet 实例，支持选项配置。
-
-#### `WithLogger(newLogger NewLogger) Option`
-配置自定义日志记录器。
-
-#### `(p *Pushlet) SetHeartbeatInterval(interval time.Duration)`
-设置心跳间隔时间。
-
-#### `(p *Pushlet) Start()`
-启动消息代理，开始处理消息。
-
-#### `(p *Pushlet) Stop()`
-停止消息代理，关闭所有连接。
-
-#### `(p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`
-启用分布式模式，通过嵌入的 novaque 客户端将消息写入 MySQL 并在实例间同步（**破坏性变更**：不再支持 Redis 地址参数）。
-
-#### `(p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request)`
-处理 SSE 连接请求，支持通过 `topic` 查询参数指定主题。
-
-#### `(p *Pushlet) HandleWebSocket(w http.ResponseWriter, r *http.Request)`
-处理 WebSocket 连接请求，支持动态主题订阅。
-
-#### `(p *Pushlet) Publish(topic, event, data string)`
-向指定主题发布消息。
-
-#### `(p *Pushlet) PublishToAll(event, data string)`
-向所有主题发布消息。
-
-## 📨 消息格式
-
-### SSE 消息格式
-```
-event: message
-data: Hello, World!
-
-```
-
-### WebSocket 订阅消息格式
-```json
-{
-  "action": "subscribe",
-  "topic": "my-topic"
-}
-```
-
-### WebSocket 消息格式（二进制 JSON）
-```json
-{
-  "event": "message",
-  "data": "Hello, World!",
-  "timestamp": "2024-01-01T12:00:00Z"
-}
-```
-
-## 🔄 动态订阅示例
-
-WebSocket 客户端可以在连接后动态管理订阅：
-
-```javascript
-// 订阅主题
-ws.send(JSON.stringify({
-    action: 'subscribe',
-    topic: 'user-notifications'
-}));
-
-// 取消订阅
-ws.send(JSON.stringify({
-    action: 'unsubscribe',
-    topic: 'user-notifications'
-}));
-```
-
-## 🏗️ 项目结构
-
-```
-pushlet/
-├── broker.go          # 消息代理核心逻辑
-├── client.go          # 客户端连接管理
-├── logger.go          # 日志系统
-├── message.go         # 消息结构定义
-├── pushlet.go         # 主要 API 入口
-├── novaque_connector.go # novaque 分布式支持
-├── go.mod            # Go 模块定义
-└── example/          # 使用示例
-    └── dual_protocol.go
-```
-
-## 🚀 性能特点
-
-- **WebSocket 二进制传输**：相比文本传输减少约 20-30% 的数据量
-- **心跳保活**：防止代理服务器超时，提高连接稳定性
-- **分布式架构**：水平扩展支持更多并发连接
-- **动态订阅**：一个 WebSocket 连接可管理多个主题，减少连接数
-
-## 🎯 使用场景
-
-- 📱 **实时通知系统** - 用户消息、系统通知
-- 📊 **实时数据监控** - 服务器状态、性能指标
-- 💬 **聊天应用** - 消息推送、在线状态
-- 🎮 **实时游戏** - 游戏状态同步
-- 📈 **股票行情** - 实时价格推送
-- 🔔 **事件提醒** - 任务提醒、日程通知
-
-## 🛠️ 最佳实践
-
-### 协议选择
-
-- **只需单向推送时使用 SSE**：简单的通知、状态更新
-- **需要双向通信或多主题管理时使用 WebSocket**：复杂的实时应用
-
-### 分布式部署
-
-- 生产环境使用高可用 MySQL，并确保各实例在发布前已启动分布式模式（novaque 按 channel 快照 fan-out）
-- 设置合适的心跳间隔（建议 30-60 秒）
-- 考虑负载均衡和故障转移
-
-### 错误处理
-
-- 客户端应实现重连逻辑
-- 服务端应处理连接异常
-- 使用自定义日志记录器监控系统状态
-
-## 📄 许可证
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
-## 🤝 贡献指南
-
-欢迎提交 Issue 和 Pull Request 来改进这个项目！
-
-1. Fork 本仓库
-2. 创建你的特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交你的更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 打开一个 Pull Request
-
-## 📞 支持
-
-如果你在使用过程中遇到问题或有建议，请：
-
-- 提交 [GitHub Issue](https://github.com/usual2970/pushlet/issues)
-- 查看 [文档和示例](./example/)
-
----
-
-**Pushlet** - 让实时消息推送变得简单高效 🚀
-		
-		message := r.URL.Query().Get("message")
-		p.Publish(topic, "message", message)
-		
-		w.Write([]byte("Message sent"))
-	})
-
-	log.Println("Server started at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-```
-
-### 分布式部署
+## 快速开始（单机）
 
 ```go
 package main
@@ -451,162 +26,179 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/usual2970/pushlet"
 )
 
 func main() {
-	// 创建 Pushlet 实例
 	p := pushlet.New()
-	
-	db, _ := sql.Open("mysql", os.Getenv("PUSHLET_MYSQL_DSN"))
-	if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
-		log.Fatalf("Failed to enable distributed mode: %v", err)
-	}
-
+	p.SetHeartbeatInterval(30 * time.Second)
 	p.Start()
 	defer p.Stop()
 
 	http.HandleFunc("/events", p.HandleSSE)
-	
-	// 消息发送接口
+	http.HandleFunc("/ws", p.HandleWebsocket)
 	http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		topic := r.URL.Query().Get("topic")
 		if topic == "" {
 			topic = "default"
 		}
-		
-		message := r.URL.Query().Get("message")
-		p.Publish(topic, "message", message)
-		
-		w.Write([]byte("Message sent to all instances"))
+		msg := r.URL.Query().Get("message")
+		if err := p.Publish(topic, "message", msg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Write([]byte("ok"))
 	})
 
-	log.Println("Server started at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 ```
 
-## 客户端用法
+- SSE：`GET /events?topic=<name>`
+- WebSocket：`GET /ws?topic=<name>`（可选初始主题）
+- 发布：`POST /send?topic=<name>&message=<text>`
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Pushlet 客户端示例</title>
-</head>
-<body>
-    <h1>Pushlet 消息接收器</h1>
-    <div id="messages"></div>
+## 分布式模式
 
-    <script>
-        const evtSource = new EventSource("/events");
-        const messagesDiv = document.getElementById("messages");
-        
-        // 监听默认消息
-        evtSource.addEventListener("message", function(e) {
-            const newElement = document.createElement("div");
-            newElement.textContent = `收到消息: ${e.data}`;
-            messagesDiv.appendChild(newElement);
-        });
-        
-        // 监听自定义事件
-        evtSource.addEventListener("custom-event", function(e) {
-            const newElement = document.createElement("div");
-            newElement.textContent = `收到自定义事件: ${e.data}`;
-            newElement.style.color = "blue";
-            messagesDiv.appendChild(newElement);
-        });
-        
-        // 处理连接错误
-        evtSource.onerror = function() {
-            const newElement = document.createElement("div");
-            newElement.textContent = "连接错误，正在重新连接...";
-            newElement.style.color = "red";
-            messagesDiv.appendChild(newElement);
-        };
-    </script>
-</body>
-</html>
-```
+1. 每个实例持有指向**同一 MySQL** 的 `*sql.DB`。
+2. 在 **`Start()` 之前** 调用 `EnableDistributedMode`（每个进程只能启用一次）。
+3. 再 `Start()` / `Stop()`。
 
-## API 参考
-
-### 核心方法
-
-#### `New() *Pushlet`
-创建一个新的 Pushlet 实例。
-
-#### `(p *Pushlet) Start()`
-启动消息代理，开始处理消息。
-
-#### `(p *Pushlet) Stop()`
-停止消息代理，关闭所有连接。
-
-#### `(p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`
-启用分布式模式，通过嵌入的 novaque 客户端将消息写入 MySQL 并在实例间同步（**破坏性变更**：不再支持 Redis 地址参数）。
-
-#### `(p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request)`
-处理 SSE 连接请求，建立实时消息通道。
-
-#### `(p *Pushlet) Publish(topic, event, data string)`
-向指定主题发布消息。
-
-#### `(p *Pushlet) PublishToAll(event, data string)`
-向所有主题发布消息。
-
-## 高级用法
-
-### 自定义事件类型
+跨实例投递为 **至少一次**（at-least-once）：客户端应做幂等或去重。发布时 novaque 只对**当时已存在的 channel** 做 fan-out，新实例上线前应完成 `Start`，再接入流量。
 
 ```go
-// 发送自定义事件类型
-p.Publish("user-notifications", "user-login", "User John has logged in")
+db, err := sql.Open("mysql", dsn)
+if err != nil {
+	log.Fatal(err)
+}
+
+p := pushlet.New()
+if err := p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions()); err != nil {
+	log.Fatal(err)
+}
+p.Start()
+defer p.Stop()
 ```
 
-```javascript
-// 客户端监听自定义事件
-evtSource.addEventListener("user-login", function(e) {
-    console.log("User login event:", e.data);
-});
+`DistributedOptions` 可调整 relay 主题名、发布 TTL、以及 `novaque.Options`（租约、轮询间隔等）。默认 relay 主题 `pushlet-relay`，单条 relay 消息 TTL 较短，避免长期堆积。
+
+### 与 v0.0.11 及更早版本的差异
+
+- 已移除 Redis 后端；分布式仅支持 novaque + MySQL。
+- `EnableDistributedMode(redisAddr, password, db int)` 已改为 `EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`。
+- `Publish` / `PublishToAll` 返回 `error`（MySQL/novaque 失败时会向上传递）。
+
+## 可运行示例（双实例 + Docker）
+
+`example/` 在**同一进程**内启动两个分布式实例（默认 **9090** / **9091**）。未设置 `PUSHLET_MYSQL_DSN` 时会用 testcontainers 拉起 MySQL 8（需要 Docker）。
+
+```bash
+cd example
+go run .
 ```
 
-### 使用主题路径
+验证跨实例推送：
 
-```go
-// 主题可以用路径格式组织
-p.Publish("users/123/notifications", "new-message", "你有一条新消息")
+```bash
+# 终端 1：订阅实例 B
+curl -N 'http://localhost:9091/events?topic=demo'
+
+# 终端 2：在实例 A 发布
+curl -X POST 'http://localhost:9090/send?topic=demo&message=hello'
 ```
 
-### 处理大量连接
+环境变量：
 
-对于高并发场景，建议使用分布式模式并结合负载均衡：
+| 变量 | 含义 |
+|------|------|
+| `PUSHLET_MYSQL_DSN` | 使用已有 MySQL，跳过 testcontainer |
+| `PUSHLET_ADDR` | 实例 A 监听地址（默认 `:9090`） |
+| `PUSHLET_ADDR_B` | 实例 B 监听地址（默认 `:9091`） |
 
-```go
-p.EnableDistributedMode(db, pushlet.DefaultDistributedOptions())
+## 协议说明
 
-// 增加缓冲区大小以处理更多连接
-http.ListenAndServe(":8080", nil)
+### SSE
+
+服务端输出标准 Event Stream。业务消息形如：
+
+```text
+event: message
+data: <payload>
+
 ```
 
-## 性能考虑
+连接建立时会收到 `event: connected`。心跳为 SSE 注释行（`: heartbeat ...`）。
 
-- SSE 连接会占用服务器资源，建议在高负载场景使用分布式部署
-- 考虑为长期空闲的连接设置超时机制
-- 对于超大规模部署，考虑使用消息队列作为中间层
+### WebSocket
 
-## 贡献指南
+- 服务端推送为 **binary**，载荷为 `topic` + 空格 + JSON `Message`。
+- 客户端动态订阅使用 **binary 文本命令**（非 JSON）：
+  - `SUB <topic>\n`
+  - `UNSUB <topic>\n`
+  - `PING\n`
+- 成功时服务端回复 binary `OK`。
 
-欢迎提交 Issue 和 Pull Request 来改进这个项目。贡献前请确保：
+### Message（JSON 字段）
 
-1. 代码风格符合 Go 的规范
-2. 添加测试用例
-3. 更新文档
+| 字段 | 说明 |
+|------|------|
+| `topic` | 主题 |
+| `event` | 事件名（SSE 的 event 行） |
+| `data` | 正文 |
+| `timestamp` | 时间戳 |
+
+## API 摘要
+
+| 方法 | 说明 |
+|------|------|
+| `New(...Option)` | 创建实例；`WithLogger` 可注入日志 |
+| `SetHeartbeatInterval` | SSE ping / WS ping 间隔 |
+| `EnableDistributedMode(db, opts)` | 启用分布式（须在 `Start` 前，且仅一次） |
+| `Start()` | 启动 broker（**必须先于**接受连接） |
+| `Stop()` | 停止 broker 与分布式 connector |
+| `HandleSSE` / `HandleWebsocket` | HTTP 处理器 |
+| `Publish(topic, event, data)` | 按主题发布，返回 `error` |
+| `PublishToAll(event, data)` | 广播到所有已订阅主题，返回 `error` |
+
+Broker 未 `Start` 时注册连接会失败（HTTP 503）。客户端发送缓冲区满时会丢弃该连接并自动从 broker 注销，避免向已关闭 channel 发送。
+
+## 项目结构
+
+```text
+pushlet/
+├── pushlet.go              # HTTP 入口与 Publish API
+├── broker.go               # 主题路由与分布式 relay
+├── client.go               # 单连接 outbound 通道与背压
+├── novaque_connector.go    # novaque relay 实现
+├── distributed_connector.go
+├── message.go
+├── logger.go
+├── example/main.go         # 双实例 + testcontainers 演示
+└── internal/testmysql/     # 集成测试用 MySQL 容器（build tag: integration）
+```
+
+## 测试
+
+```bash
+go test ./...
+
+# 需要 Docker
+go test -tags=integration ./...
+```
+
+## 运维建议
+
+- 多副本前确保每个实例已成功 `EnableDistributedMode` + `Start`，再挂负载均衡。
+- 慢消费者会触发背压断开；客户端应实现重连。
+- 生产环境请自行限制 CORS、`CheckOrigin`（当前默认为宽松配置，便于 demo）。
+- 监控 MySQL 与 novaque 积压；relay 解码失败会打日志并丢弃该条消息。
 
 ## 许可证
 
 MIT
-
-## 致谢
-
-感谢所有贡献者以及 Go 社区的支持。
