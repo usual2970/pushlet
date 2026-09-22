@@ -80,7 +80,7 @@ if err != nil {
 
 p := pushlet.New()
 opts := pushlet.DefaultDistributedOptions()
-opts.Channel = "pushlet-prod-1" // 每个实例不同，例如 pod 名 / 实例 ID
+// opts.Channel = "pushlet-prod-1" // 可选：多副本时建议显式指定（pod 名 / 实例 ID）；留空则每进程自动生成唯一 channel
 if err := p.EnableDistributedMode(db, opts); err != nil {
 	log.Fatal(err)
 }
@@ -92,12 +92,12 @@ defer p.Stop()
 
 | 字段 | 说明 |
 |------|------|
-| **`Channel`**（必填） | novaque channel 名，**每个实例必须唯一**，用于多副本 multicast |
+| `Channel` | novaque channel；**多副本时每实例须唯一**。留空则自动生成 `pushlet-node-<host>-<random>` |
 | `RelayTopic` | relay 用的 novaque topic（默认 `pushlet-relay`） |
 | `RelayPublishTTL` | 单条 relay 消息 TTL |
 | `Novaque` | 传给 `novaque.Open` 的选项 |
 
-`DefaultDistributedOptions()` 不会填 `Channel`，启用分布式前必须自行设置。
+生产环境多实例部署建议显式设置 `Channel`，便于排查与稳定标识。
 
 ### 与 v0.0.11 及更早版本的差异
 
