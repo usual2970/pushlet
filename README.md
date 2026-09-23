@@ -1,24 +1,24 @@
 # Pushlet
 
-轻量级 Go 实时推送库，支持 **SSE** 与 **WebSocket**。单机模式下进程内转发；分布式模式下通过嵌入 [novaque](https://github.com/usual2970/novaque) 与共享 **MySQL** 在多个实例间同步消息。
+Lightweight Go library for real-time push over **SSE** and **WebSocket**. In standalone mode, messages are routed in-process; in distributed mode, instances stay in sync via embedded [novaque](https://github.com/usual2970/novaque) and a shared **MySQL** database.
 
 ![Go Version](https://img.shields.io/badge/Go-1.26.5+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-## 要求
+## Requirements
 
-| 模式 | 依赖 |
-|------|------|
-| 单机 | Go 1.26.5+ |
-| 分布式 | 上述 + MySQL 8.0.1+（InnoDB）、可共享的数据库 |
+| Mode | Dependencies |
+|------|----------------|
+| Standalone | Go 1.26.5+ |
+| Distributed | Above + MySQL 8.0.1+ (InnoDB), shared database |
 
-## 安装
+## Install
 
 ```bash
-go get github.com/usual2970/pushlet@v0.0.14
+go get github.com/usual2970/pushlet@v0.0.16
 ```
 
-## 快速开始（单机）
+## Quick start (standalone)
 
 ```go
 package main
@@ -60,17 +60,17 @@ func main() {
 }
 ```
 
-- SSE：`GET /events?topic=<name>`
-- WebSocket：`GET /ws?topic=<name>`（可选初始主题）
-- 发布：`POST /send?topic=<name>&message=<text>`
+- SSE: `GET /events?topic=<name>`
+- WebSocket: `GET /ws?topic=<name>` (optional initial topic)
+- Publish: `POST /send?topic=<name>&message=<text>`
 
-## 分布式模式
+## Distributed mode
 
-1. 每个实例持有指向**同一 MySQL** 的 `*sql.DB`。
-2. 在 **`Start()` 之前** 调用 `EnableDistributedMode`（每个进程只能启用一次）。
-3. 再 `Start()` / `Stop()`。
+1. Each instance uses a `*sql.DB` pointing at the **same MySQL**.
+2. Call `EnableDistributedMode` **before** `Start()` (once per process).
+3. Then `Start()` / `Stop()`.
 
-跨实例投递为 **至少一次**（at-least-once）：客户端应做幂等或去重。发布时 novaque 只对**当时已存在的 channel** 做 fan-out，新实例上线前应完成 `Start`，再接入流量。
+Cross-instance delivery is **at-least-once**: clients should dedupe or handle idempotently. Relay publishes fan out only to **channels that exist at publish time**; new instances should finish `Start()` before taking traffic.
 
 ```go
 db, err := sql.Open("mysql", dsn)
@@ -80,7 +80,7 @@ if err != nil {
 
 p := pushlet.New()
 opts := pushlet.DefaultDistributedOptions()
-// opts.Channel = "pushlet-prod-1" // 可选：多副本时建议显式指定（pod 名 / 实例 ID）；留空则每进程自动生成唯一 channel
+// opts.Channel = "pushlet-prod-1" // optional: set per replica (pod name / instance ID); if empty, a unique channel is generated per process
 if err := p.EnableDistributedMode(db, opts); err != nil {
 	log.Fatal(err)
 }
@@ -88,56 +88,56 @@ p.Start()
 defer p.Stop()
 ```
 
-`DistributedOptions` 字段：
+`DistributedOptions` fields:
 
-| 字段 | 说明 |
-|------|------|
-| `Channel` | novaque channel；**多副本时每实例须唯一**。留空则自动生成 `pushlet-node-<host>-<random>` |
-| `RelayTopic` | relay 用的 novaque topic（默认 `pushlet-relay`） |
-| `RelayPublishTTL` | 单条 relay 消息 TTL |
-| `Novaque` | 传给 `novaque.Open` 的选项 |
+| Field | Description |
+|-------|-------------|
+| `Channel` | Novaque channel; **must be unique per replica** in multi-instance setups. If empty, auto-generated as `pushlet-node-<host>-<random>` |
+| `RelayTopic` | Novaque topic for relay traffic (default `pushlet-relay`) |
+| `RelayPublishTTL` | TTL for each relay message |
+| `Novaque` | Options passed to `novaque.Open` |
 
-生产环境多实例部署建议显式设置 `Channel`，便于排查与稳定标识。
+For production multi-replica deployments, set `Channel` explicitly for stable identity and easier debugging.
 
-### 与 v0.0.11 及更早版本的差异
+### Changes since v0.0.11 and earlier
 
-- 已移除 Redis 后端；分布式仅支持 novaque + MySQL。
-- `EnableDistributedMode(redisAddr, password, db int)` 已改为 `EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`。
-- `Publish` / `PublishToAll` 返回 `error`（MySQL/novaque 失败时会向上传递）。
+- Redis backend removed; distributed mode is novaque + MySQL only.
+- `EnableDistributedMode(redisAddr, password, db int)` replaced by `EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`.
+- `Publish` / `PublishToAll` return `error` when MySQL/novaque operations fail.
 
-## 可运行示例（双实例 + Docker）
+## Runnable example (two instances + Docker)
 
-`example/` 在**同一进程**内启动两个分布式实例（默认 **9090** / **9091**）。未设置 `PUSHLET_MYSQL_DSN` 时会用 testcontainers 拉起 MySQL 8（需要 Docker）。
+`example/` runs **two distributed instances in one process** (defaults **9090** / **9091**). Without `PUSHLET_MYSQL_DSN`, it starts MySQL 8 via testcontainers (Docker required).
 
 ```bash
 cd example
 go run .
 ```
 
-验证跨实例推送：
+Cross-instance push:
 
 ```bash
-# 终端 1：订阅实例 B
+# Terminal 1: subscribe on instance B
 curl -N 'http://localhost:9091/events?topic=demo'
 
-# 终端 2：在实例 A 发布
+# Terminal 2: publish on instance A
 curl -X POST 'http://localhost:9090/send?topic=demo&message=hello'
 ```
 
-环境变量：
+Environment variables:
 
-| 变量 | 含义 |
-|------|------|
-| `PUSHLET_MYSQL_DSN` | 使用已有 MySQL，跳过 testcontainer |
-| `PUSHLET_ADDR` | 实例 A 监听地址（默认 `:9090`） |
-| `PUSHLET_ADDR_B` | 实例 B 监听地址（默认 `:9091`） |
-| `PUSHLET_NOVAQUE_CHANNEL_A` / `_B` | 实例 A/B 的 novaque channel（默认 `pushlet-a` / `pushlet-b`） |
+| Variable | Meaning |
+|----------|---------|
+| `PUSHLET_MYSQL_DSN` | Use existing MySQL; skip testcontainer |
+| `PUSHLET_ADDR` | Instance A listen address (default `:9090`) |
+| `PUSHLET_ADDR_B` | Instance B listen address (default `:9091`) |
+| `PUSHLET_NOVAQUE_CHANNEL_A` / `_B` | Novaque channel for A/B (default `pushlet-a` / `pushlet-b`) |
 
-## 协议说明
+## Protocol
 
 ### SSE
 
-服务端输出标准 Event Stream。业务消息形如：
+The server emits a standard Event Stream. Application messages look like:
 
 ```text
 event: message
@@ -145,72 +145,72 @@ data: <payload>
 
 ```
 
-连接建立时会收到 `event: connected`。心跳为 SSE 注释行（`: heartbeat ...`）。
+On connect you receive `event: connected`. Heartbeats are SSE comment lines (`: heartbeat ...`).
 
 ### WebSocket
 
-- 服务端推送为 **binary**，载荷为 `topic` + 空格 + JSON `Message`。
-- 客户端动态订阅使用 **binary 文本命令**（非 JSON）：
+- Server pushes **binary** frames: `topic` + space + JSON `Message`.
+- Dynamic subscribe/unsubscribe uses **binary text commands** (not JSON):
   - `SUB <topic>\n`
   - `UNSUB <topic>\n`
   - `PING\n`
-- 成功时服务端回复 binary `OK`。
+- Success replies are binary `OK`.
 
-### Message（JSON 字段）
+### Message (JSON fields)
 
-| 字段 | 说明 |
-|------|------|
-| `topic` | 主题 |
-| `event` | 事件名（SSE 的 event 行） |
-| `data` | 正文 |
-| `timestamp` | 时间戳 |
+| Field | Description |
+|-------|-------------|
+| `topic` | Topic name |
+| `event` | Event name (SSE `event` line) |
+| `data` | Payload body |
+| `timestamp` | Timestamp |
 
-## API 摘要
+## API summary
 
-| 方法 | 说明 |
-|------|------|
-| `New(...Option)` | 创建实例；`WithLogger` 可注入日志 |
-| `SetHeartbeatInterval` | SSE ping / WS ping 间隔 |
-| `EnableDistributedMode(db, opts)` | 启用分布式（须在 `Start` 前，且仅一次） |
-| `Start()` | 启动 broker（**必须先于**接受连接） |
-| `Stop()` | 停止 broker 与分布式 connector |
-| `HandleSSE` / `HandleWebsocket` | HTTP 处理器 |
-| `Publish(topic, event, data)` | 按主题发布，返回 `error` |
-| `PublishToAll(event, data)` | 广播到所有已订阅主题，返回 `error` |
+| Method | Description |
+|--------|-------------|
+| `New(...Option)` | Create instance; `WithLogger` injects logging |
+| `SetHeartbeatInterval` | SSE ping / WebSocket ping interval |
+| `EnableDistributedMode(db, opts)` | Enable distributed mode (before `Start`, once) |
+| `Start()` | Start broker (**required before** accepting connections) |
+| `Stop()` | Stop broker and distributed connector |
+| `HandleSSE` / `HandleWebsocket` | HTTP handlers |
+| `Publish(topic, event, data)` | Publish to a topic; returns `error` |
+| `PublishToAll(event, data)` | Broadcast to all subscribed topics; returns `error` |
 
-Broker 未 `Start` 时注册连接会失败（HTTP 503）。客户端发送缓冲区满时会丢弃该连接并自动从 broker 注销，避免向已关闭 channel 发送。
+Registration fails with HTTP 503 if the broker is not `Start`ed. When a client send buffer is full, the connection is dropped and unregistered to avoid sends on a closed channel.
 
-## 项目结构
+## Layout
 
 ```text
 pushlet/
-├── pushlet.go              # HTTP 入口与 Publish API
-├── broker.go               # 主题路由与分布式 relay
-├── client.go               # 单连接 outbound 通道与背压
-├── novaque_connector.go    # novaque relay 实现
+├── pushlet.go              # HTTP entrypoints and Publish API
+├── broker.go               # Topic routing and distributed relay
+├── client.go               # Per-connection outbound channel and backpressure
+├── novaque_connector.go    # Novaque relay implementation
 ├── distributed_connector.go
 ├── message.go
 ├── logger.go
-├── example/main.go         # 双实例 + testcontainers 演示
-└── internal/testmysql/     # 集成测试用 MySQL 容器（build tag: integration）
+├── example/main.go         # Two-instance testcontainers demo
+└── internal/testmysql/     # MySQL container for integration tests (tag: integration)
 ```
 
-## 测试
+## Tests
 
 ```bash
 go test ./...
 
-# 需要 Docker
+# Requires Docker
 go test -tags=integration ./...
 ```
 
-## 运维建议
+## Operations
 
-- 多副本前确保每个实例已成功 `EnableDistributedMode` + `Start`，再挂负载均衡。
-- 慢消费者会触发背压断开；客户端应实现重连。
-- 生产环境请自行限制 CORS、`CheckOrigin`（当前默认为宽松配置，便于 demo）。
-- 监控 MySQL 与 novaque 积压；relay 解码失败会打日志并丢弃该条消息。
+- Before scaling out, ensure every instance has completed `EnableDistributedMode` + `Start()` before load balancing.
+- Slow consumers are disconnected under backpressure; clients should reconnect.
+- Restrict CORS and `CheckOrigin` in production (defaults are permissive for demos).
+- Monitor MySQL and novaque backlog; invalid relay envelopes are logged and dropped.
 
-## 许可证
+## License
 
 [MIT License](./LICENSE)
