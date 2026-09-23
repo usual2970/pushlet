@@ -2,13 +2,13 @@ package pushlet
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/usual2970/novaque"
 )
 
 var okBytes = []byte("OK")
@@ -53,9 +53,9 @@ func (p *Pushlet) SetHeartbeatInterval(interval time.Duration) {
 	p.heartbeatInterval = interval
 }
 
-// EnableDistributedMode enables multi-instance fan-out via novaque (MySQL-backed).
-func (p *Pushlet) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error {
-	return p.broker.EnableDistributedMode(db, opts)
+// EnableDistributedMode enables multi-instance fan-out via novaque on a shared SQL store.
+func (p *Pushlet) EnableDistributedMode(client *novaque.Client, opts DistributedOptions) error {
+	return p.broker.EnableDistributedMode(client, opts)
 }
 
 // Start runs the internal broker and any distributed relay goroutines.

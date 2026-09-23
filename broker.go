@@ -1,11 +1,9 @@
 package pushlet
 
 import (
-	"database/sql"
 	"sync"
 
 	"github.com/usual2970/novaque"
-	"github.com/usual2970/novaque/driver/mysql"
 )
 
 // Broker manages topic subscriptions and in-process message delivery.
@@ -98,17 +96,18 @@ func NewBroker() *Broker {
 	}
 }
 
-// EnableDistributedMode enables cross-node delivery via embedded novaque (MySQL).
-func (b *Broker) EnableDistributedMode(db *sql.DB, opts DistributedOptions) error {
+// EnableDistributedMode enables cross-node delivery via an opened novaque client.
+// Open the client with any novaque driver (MySQL, PostgreSQL, or SQLite) on a
+// shared database before calling this method.
+func (b *Broker) EnableDistributedMode(client *novaque.Client, opts DistributedOptions) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if b.distributedMode {
 		return errDistributedAlreadyOn
 	}
-	client, err := novaque.Open(mysql.New(db), opts.Novaque)
-	if err != nil {
-		return err
+	if client == nil {
+		return errDistributedNoClient
 	}
 	connector, err := NewNovaqueConnector(client, opts)
 	if err != nil {

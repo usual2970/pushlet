@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+func TestEnableDistributedModeNilClient(t *testing.T) {
+	b := NewBroker()
+	err := b.EnableDistributedMode(nil, DefaultDistributedOptions())
+	if !errors.Is(err, errDistributedNoClient) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestResolveDistributedChannel(t *testing.T) {
 	if got := resolveDistributedChannel("my-pod"); got != "my-pod" {
 		t.Fatalf("explicit: got %q", got)

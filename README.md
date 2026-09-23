@@ -1,6 +1,6 @@
 # Pushlet
 
-Lightweight Go library for real-time push over **SSE** and **WebSocket**. In standalone mode, messages are routed in-process; in distributed mode, instances stay in sync via embedded [novaque](https://github.com/usual2970/novaque) and a shared **MySQL** database.
+Lightweight Go library for real-time push over **SSE** and **WebSocket**. In standalone mode, messages are routed in-process; in distributed mode, instances stay in sync via embedded [novaque](https://github.com/usual2970/novaque) and a shared SQL database (MySQL, PostgreSQL, or SQLite).
 
 ![Go Version](https://img.shields.io/badge/Go-1.26.5+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
@@ -10,12 +10,12 @@ Lightweight Go library for real-time push over **SSE** and **WebSocket**. In sta
 | Mode | Dependencies |
 |------|----------------|
 | Standalone | Go 1.26.5+ |
-| Distributed | Above + MySQL 8.0.1+ (InnoDB), shared database |
+| Distributed | Above + shared database via novaque: **MySQL ≥ 8.0.1** (InnoDB), **PostgreSQL ≥ 14**, or **SQLite ≥ 3.39** |
 
 ## Install
 
 ```bash
-go get github.com/usual2970/pushlet@v0.0.16
+go get github.com/usual2970/pushlet@v0.0.17
 ```
 
 ## Quick start (standalone)
@@ -66,27 +66,47 @@ func main() {
 
 ## Distributed mode
 
-1. Each instance uses a `*sql.DB` pointing at the **same MySQL**.
-2. Call `EnableDistributedMode` **before** `Start()` (once per process).
+1. Each instance opens the **same** database with a [novaque driver](https://github.com/usual2970/novaque) (`mysql`, `postgres`, or `sqlite`).
+2. Call `novaque.Open(driver.New(db), opts.Novaque)` and pass the client to `EnableDistributedMode` **before** `Start()` (once per process).
 3. Then `Start()` / `Stop()`.
 
 Cross-instance delivery is **at-least-once**: clients should dedupe or handle idempotently. Relay publishes fan out only to **channels that exist at publish time**; new instances should finish `Start()` before taking traffic.
 
+MySQL example:
+
 ```go
+import (
+	"database/sql"
+
+	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/usual2970/novaque"
+	"github.com/usual2970/novaque/driver/mysql"
+	"github.com/usual2970/pushlet"
+)
+
 db, err := sql.Open("mysql", dsn)
 if err != nil {
 	log.Fatal(err)
 }
 
-p := pushlet.New()
 opts := pushlet.DefaultDistributedOptions()
-// opts.Channel = "pushlet-prod-1" // optional: set per replica (pod name / instance ID); if empty, a unique channel is generated per process
-if err := p.EnableDistributedMode(db, opts); err != nil {
+// opts.Channel = "pushlet-prod-1" // optional: set per replica; if empty, auto-generated per process
+
+client, err := novaque.Open(mysql.New(db), opts.Novaque)
+if err != nil {
+	log.Fatal(err)
+}
+
+p := pushlet.New()
+if err := p.EnableDistributedMode(client, opts); err != nil {
 	log.Fatal(err)
 }
 p.Start()
 defer p.Stop()
 ```
+
+PostgreSQL: use `github.com/usual2970/novaque/driver/postgres` with a `pgx`/`database/sql` pool. SQLite: use `github.com/usual2970/novaque/driver/sqlite` (see novaque docs for WAL / busy-timeout DSN flags).
 
 `DistributedOptions` fields:
 
@@ -101,9 +121,9 @@ For production multi-replica deployments, set `Channel` explicitly for stable id
 
 ### Changes since v0.0.11 and earlier
 
-- Redis backend removed; distributed mode is novaque + MySQL only.
-- `EnableDistributedMode(redisAddr, password, db int)` replaced by `EnableDistributedMode(db *sql.DB, opts DistributedOptions) error`.
-- `Publish` / `PublishToAll` return `error` when MySQL/novaque operations fail.
+- Redis backend removed; distributed mode uses novaque on MySQL, PostgreSQL, or SQLite.
+- `EnableDistributedMode(redisAddr, password, db int)` replaced by `EnableDistributedMode(client *novaque.Client, opts DistributedOptions) error`.
+- `Publish` / `PublishToAll` return `error` when the novaque store fails.
 
 ## Runnable example (two instances + Docker)
 
@@ -171,7 +191,7 @@ On connect you receive `event: connected`. Heartbeats are SSE comment lines (`: 
 |--------|-------------|
 | `New(...Option)` | Create instance; `WithLogger` injects logging |
 | `SetHeartbeatInterval` | SSE ping / WebSocket ping interval |
-| `EnableDistributedMode(db, opts)` | Enable distributed mode (before `Start`, once) |
+| `EnableDistributedMode(client, opts)` | Enable distributed mode (before `Start`, once) |
 | `Start()` | Start broker (**required before** accepting connections) |
 | `Stop()` | Stop broker and distributed connector |
 | `HandleSSE` / `HandleWebsocket` | HTTP handlers |
@@ -209,7 +229,7 @@ go test -tags=integration ./...
 - Before scaling out, ensure every instance has completed `EnableDistributedMode` + `Start()` before load balancing.
 - Slow consumers are disconnected under backpressure; clients should reconnect.
 - Restrict CORS and `CheckOrigin` in production (defaults are permissive for demos).
-- Monitor MySQL and novaque backlog; invalid relay envelopes are logged and dropped.
+- Monitor database and novaque backlog; invalid relay envelopes are logged and dropped.
 
 ## License
 

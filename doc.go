@@ -13,9 +13,10 @@
 // # Distributed mode
 //
 // Call [Pushlet.EnableDistributedMode] before [Pushlet.Start] to fan out
-// publishes across processes using embedded [novaque] and a shared MySQL
-// database. Delivery is at-least-once; subscribers should deduplicate if
-// needed. Configure channels and relay options with [DistributedOptions].
+// publishes across processes using embedded [novaque] and a shared database
+// (MySQL, PostgreSQL, or SQLite). Delivery is at-least-once; subscribers
+// should deduplicate if needed. Configure channels and relay options with
+// [DistributedOptions].
 //
 // # Logging
 //

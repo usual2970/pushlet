@@ -15,6 +15,9 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/usual2970/novaque"
+	"github.com/usual2970/novaque/driver/mysql"
+
 	"github.com/usual2970/pushlet"
 )
 
@@ -51,9 +54,14 @@ func runInstance(ctx context.Context, db *sql.DB, base pushlet.DistributedOption
 	instOpts := base
 	instOpts.Channel = channel
 
+	client, err := novaque.Open(mysql.New(db), instOpts.Novaque)
+	if err != nil {
+		log.Fatalf("instance %s: novaque: %v", name, err)
+	}
+
 	p := pushlet.New()
 	p.SetHeartbeatInterval(30 * time.Second)
-	if err := p.EnableDistributedMode(db, instOpts); err != nil {
+	if err := p.EnableDistributedMode(client, instOpts); err != nil {
 		log.Fatalf("instance %s: distributed mode: %v", name, err)
 	}
 	p.Start()

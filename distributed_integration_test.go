@@ -3,11 +3,24 @@
 package pushlet
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
+	"github.com/usual2970/novaque"
+	"github.com/usual2970/novaque/driver/mysql"
+
 	"github.com/usual2970/pushlet/internal/testmysql"
 )
+
+func openNovaqueClient(t *testing.T, db *sql.DB, opts DistributedOptions) *novaque.Client {
+	t.Helper()
+	client, err := novaque.Open(mysql.New(db), opts.Novaque)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
 
 func TestDistributedCrossInstance(t *testing.T) {
 	db := testmysql.Open(t)
@@ -18,14 +31,14 @@ func TestDistributedCrossInstance(t *testing.T) {
 	optsB.Channel = "test-b"
 
 	bA := NewBroker()
-	if err := bA.EnableDistributedMode(db, optsA); err != nil {
+	if err := bA.EnableDistributedMode(openNovaqueClient(t, db, optsA), optsA); err != nil {
 		t.Fatal(err)
 	}
 	bA.Start()
 	defer bA.Stop()
 
 	bB := NewBroker()
-	if err := bB.EnableDistributedMode(db, optsB); err != nil {
+	if err := bB.EnableDistributedMode(openNovaqueClient(t, db, optsB), optsB); err != nil {
 		t.Fatal(err)
 	}
 	bB.Start()
@@ -62,14 +75,14 @@ func TestDistributedPublishToAll(t *testing.T) {
 	optsB.Channel = "test-b"
 
 	bA := NewBroker()
-	if err := bA.EnableDistributedMode(db, optsA); err != nil {
+	if err := bA.EnableDistributedMode(openNovaqueClient(t, db, optsA), optsA); err != nil {
 		t.Fatal(err)
 	}
 	bA.Start()
 	defer bA.Stop()
 
 	bB := NewBroker()
-	if err := bB.EnableDistributedMode(db, optsB); err != nil {
+	if err := bB.EnableDistributedMode(openNovaqueClient(t, db, optsB), optsB); err != nil {
 		t.Fatal(err)
 	}
 	bB.Start()

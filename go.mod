@@ -6,7 +6,7 @@ require (
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/testcontainers/testcontainers-go v0.37.0
-	github.com/usual2970/novaque v0.0.11
+	github.com/usual2970/novaque v0.0.14
 )
 
 require (
