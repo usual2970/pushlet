@@ -1,6 +1,6 @@
 # Pushlet
 
-Lightweight Go library for real-time push over **SSE** and **WebSocket**. In standalone mode, messages are routed in-process; in distributed mode, instances stay in sync via embedded [novaque](https://github.com/usual2970/novaque) and a shared SQL database (MySQL, PostgreSQL, or SQLite).
+Lightweight Go library for real-time push over **SSE** and **WebSocket**. In standalone mode, messages are routed in-process; in distributed mode, instances stay in sync via a pluggable [DistributedConnector](distributed_connector.go)—either **Redis pub/sub** or embedded [novaque](https://github.com/usual2970/novaque) on a shared SQL database (MySQL, PostgreSQL, or SQLite).
 
 ![Go Version](https://img.shields.io/badge/Go-1.26.5+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
@@ -10,7 +10,8 @@ Lightweight Go library for real-time push over **SSE** and **WebSocket**. In sta
 | Mode | Dependencies |
 |------|----------------|
 | Standalone | Go 1.26.5+ |
-| Distributed | Above + shared database via novaque: **MySQL ≥ 8.0.1** (InnoDB), **PostgreSQL ≥ 14**, or **SQLite ≥ 3.39** |
+| Distributed (Redis) | Above + **Redis** reachable from every replica |
+| Distributed (novaque) | Above + shared database via novaque: **MySQL ≥ 8.0.1** (InnoDB), **PostgreSQL ≥ 14**, or **SQLite ≥ 3.39** |
 
 ## Install
 
@@ -66,11 +67,39 @@ func main() {
 
 ## Distributed mode
 
-1. Each instance opens the **same** database with a [novaque driver](https://github.com/usual2970/novaque) (`mysql`, `postgres`, or `sqlite`).
-2. Call `novaque.Open(driver.New(db), opts.Novaque)` and pass the client to `EnableDistributedMode` **before** `Start()` (once per process).
+Pick **one** backend per process. Both use the same JSON **relay envelope** on a single relay channel/topic (default `pushlet-relay`).
+
+1. Build a [DistributedConnector](distributed_connector.go) (`RedisConnector` or `NovaqueConnector`).
+2. Call `EnableDistributedMode(connector)` **before** `Start()` (once per process).
 3. Then `Start()` / `Stop()`.
 
+### Redis (pub/sub)
+
+Ephemeral **fire-and-forget** relay—fast, no SQL, but messages are not durably queued for offline replicas.
+
+```go
+opts := pushlet.DefaultRedisOptions()
+opts.Addr = "127.0.0.1:6379"
+
+conn, err := pushlet.NewRedisConnector(opts)
+if err != nil {
+	log.Fatal(err)
+}
+
+p := pushlet.New()
+if err := p.EnableDistributedMode(conn); err != nil {
+	log.Fatal(err)
+}
+p.Start()
+defer p.Stop()
+```
+
+### Novaque (SQL)
+
 Cross-instance delivery is **at-least-once**: clients should dedupe or handle idempotently. Relay publishes fan out only to **channels that exist at publish time**; new instances should finish `Start()` before taking traffic.
+
+1. Each instance opens the **same** database with a [novaque driver](https://github.com/usual2970/novaque) (`mysql`, `postgres`, or `sqlite`).
+2. Call `novaque.Open(driver.New(db), opts.Novaque)` and `EnableDistributedNovaque(client, opts)`.
 
 MySQL example:
 
@@ -99,7 +128,7 @@ if err != nil {
 }
 
 p := pushlet.New()
-if err := p.EnableDistributedMode(client, opts); err != nil {
+if err := p.EnableDistributedNovaque(client, opts); err != nil {
 	log.Fatal(err)
 }
 p.Start()
@@ -146,13 +175,18 @@ pushlet.HandleSSEGuarded(w, r, pushlet.SSEGuard{
 
 ### MySQL open helper
 
-`OpenMySQLNovaque` opens a pooled `*sql.DB`, pings, and returns an opened `*novaque.Client` for `EnableDistributedMode`. The embedder closes the DB after `Stop()`.
+`OpenMySQLNovaque` opens a pooled `*sql.DB`, pings, and returns an opened `*novaque.Client` for `EnableDistributedNovaque`. The embedder closes the DB after `Stop()`.
+
+### Changes since v0.0.18
+
+- `EnableDistributedMode` now accepts a [DistributedConnector](distributed_connector.go); use `EnableDistributedNovaque` for the previous novaque-only signature.
+- Nil-client errors use `errDistributedNoConnector` instead of the removed `errDistributedNoClient` (`errors.Is` checks must be updated).
+- Redis distributed mode returns via [RedisConnector](redis_connector.go) (unified relay envelope, not legacy per-topic Redis channels).
 
 ### Changes since v0.0.11 and earlier
 
-- Redis backend removed; distributed mode uses novaque on MySQL, PostgreSQL, or SQLite.
-- `EnableDistributedMode(redisAddr, password, db int)` replaced by `EnableDistributedMode(client *novaque.Client, opts DistributedOptions) error`.
-- `Publish` / `PublishToAll` return `error` when the novaque store fails.
+- Distributed mode no longer uses the v0.0.11 `EnableDistributedMode(redisAddr, password, db int)` API.
+- `Publish` / `PublishToAll` return `error` when the active connector fails.
 
 ## Runnable example (two instances + Docker)
 
@@ -220,7 +254,9 @@ On connect you receive `event: connected`. Heartbeats are SSE comment lines (`: 
 |--------|-------------|
 | `New(...Option)` | Create instance; `WithLogger` injects logging |
 | `SetHeartbeatInterval` | SSE ping / WebSocket ping interval |
-| `EnableDistributedMode(client, opts)` | Enable distributed mode (before `Start`, once) |
+| `EnableDistributedMode(connector)` | Enable distributed mode with Redis or custom connector (before `Start`, once) |
+| `EnableDistributedNovaque(client, opts)` | Enable distributed mode via novaque (before `Start`, once) |
+| `NewRedisConnector(opts)` | Build a Redis [DistributedConnector](distributed_connector.go) |
 | `Start()` | Start broker (**required before** accepting connections) |
 | `Stop()` | Stop broker and distributed connector |
 | `HandleSSE` / `HandleWebsocket` | HTTP handlers |

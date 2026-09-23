@@ -6,10 +6,18 @@ import (
 	"time"
 )
 
-func TestEnableDistributedModeNilClient(t *testing.T) {
+func TestEnableDistributedModeNilConnector(t *testing.T) {
 	b := NewBroker()
-	err := b.EnableDistributedMode(nil, DefaultDistributedOptions())
-	if !errors.Is(err, errDistributedNoClient) {
+	err := b.EnableDistributedMode(nil)
+	if !errors.Is(err, errDistributedNoConnector) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnableDistributedNovaqueNilClient(t *testing.T) {
+	b := NewBroker()
+	err := b.EnableDistributedNovaque(nil, DefaultDistributedOptions())
+	if !errors.Is(err, errDistributedNoConnector) {
 		t.Fatalf("got %v", err)
 	}
 }

@@ -61,7 +61,7 @@ func runInstance(ctx context.Context, db *sql.DB, base pushlet.DistributedOption
 
 	p := pushlet.New()
 	p.SetHeartbeatInterval(30 * time.Second)
-	if err := p.EnableDistributedMode(client, instOpts); err != nil {
+	if err := p.EnableDistributedNovaque(client, instOpts); err != nil {
 		log.Fatalf("instance %s: distributed mode: %v", name, err)
 	}
 	p.Start()

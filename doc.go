@@ -19,11 +19,12 @@
 //
 // # Distributed mode
 //
-// Call [Pushlet.EnableDistributedMode] before [Pushlet.Start] to fan out
-// publishes across processes using embedded [novaque] and a shared database
-// (MySQL, PostgreSQL, or SQLite). Delivery is at-least-once; subscribers
-// should deduplicate if needed. Configure channels and relay options with
-// [DistributedOptions].
+// Call [Pushlet.EnableDistributedMode] with a [DistributedConnector] before
+// [Pushlet.Start] to fan out publishes across processes. Use [RedisConnector]
+// for Redis pub/sub or [EnableDistributedNovaque] for embedded [novaque] on a
+// shared SQL database (MySQL, PostgreSQL, or SQLite). Novaque delivery is
+// at-least-once; Redis relay is fire-and-forget. Configure relay naming with
+// [RelayOptions] and backend-specific options ([RedisOptions], [DistributedOptions]).
 //
 // # Logging
 //

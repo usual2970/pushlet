@@ -31,14 +31,14 @@ func TestDistributedCrossInstance(t *testing.T) {
 	optsB.Channel = "test-b"
 
 	bA := NewBroker()
-	if err := bA.EnableDistributedMode(openNovaqueClient(t, db, optsA), optsA); err != nil {
+	if err := bA.EnableDistributedNovaque(openNovaqueClient(t, db, optsA), optsA); err != nil {
 		t.Fatal(err)
 	}
 	bA.Start()
 	defer bA.Stop()
 
 	bB := NewBroker()
-	if err := bB.EnableDistributedMode(openNovaqueClient(t, db, optsB), optsB); err != nil {
+	if err := bB.EnableDistributedNovaque(openNovaqueClient(t, db, optsB), optsB); err != nil {
 		t.Fatal(err)
 	}
 	bB.Start()
@@ -75,14 +75,14 @@ func TestDistributedPublishToAll(t *testing.T) {
 	optsB.Channel = "test-b"
 
 	bA := NewBroker()
-	if err := bA.EnableDistributedMode(openNovaqueClient(t, db, optsA), optsA); err != nil {
+	if err := bA.EnableDistributedNovaque(openNovaqueClient(t, db, optsA), optsA); err != nil {
 		t.Fatal(err)
 	}
 	bA.Start()
 	defer bA.Stop()
 
 	bB := NewBroker()
-	if err := bB.EnableDistributedMode(openNovaqueClient(t, db, optsB), optsB); err != nil {
+	if err := bB.EnableDistributedNovaque(openNovaqueClient(t, db, optsB), optsB); err != nil {
 		t.Fatal(err)
 	}
 	bB.Start()

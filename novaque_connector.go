@@ -12,23 +12,40 @@ import (
 	"github.com/usual2970/novaque"
 )
 
+// RelayOptions configures the shared relay channel/topic name for distributed mode.
+type RelayOptions struct {
+	// RelayTopic is the relay channel (Redis) or novaque topic (default pushlet-relay).
+	RelayTopic string
+}
+
 // DistributedOptions configures novaque-backed distributed mode.
 type DistributedOptions struct {
+	RelayOptions
 	Novaque novaque.Options
 	// Channel is the novaque channel on RelayTopic. Each instance needs a distinct
 	// channel for multicast. If empty, a unique name is generated per process.
 	Channel string
-	// RelayTopic is the novaque topic used for cross-node relay (default pushlet-relay).
-	RelayTopic string
 	// RelayPublishTTL is per-message TTL for relay publishes.
 	RelayPublishTTL time.Duration
+}
+
+// EnableDistributedNovaque opens distributed mode with an embedded novaque client.
+func (b *Broker) EnableDistributedNovaque(client *novaque.Client, opts DistributedOptions) error {
+	if client == nil {
+		return errDistributedNoConnector
+	}
+	connector, err := NewNovaqueConnector(client, opts)
+	if err != nil {
+		return err
+	}
+	return b.EnableDistributedMode(connector)
 }
 
 // DefaultDistributedOptions returns relay-friendly defaults. Channel may be left
 // empty to auto-generate a unique channel per instance.
 func DefaultDistributedOptions() DistributedOptions {
 	return DistributedOptions{
-		RelayTopic:      defaultRelayTopic,
+		RelayOptions:    RelayOptions{RelayTopic: defaultRelayTopic},
 		RelayPublishTTL: 5 * time.Minute,
 		Novaque: novaque.Options{
 			DefaultTTL: time.Minute,
@@ -118,6 +135,8 @@ func (nc *NovaqueConnector) Start() error {
 		case nc.messageChan <- pm:
 		case <-ctx.Done():
 			return ctx.Err()
+		default:
+			log.Printf("pushlet: drop relay message: novaque message channel full on %s/%s", nc.relayTopic, nc.channelName)
 		}
 		return nil
 	})

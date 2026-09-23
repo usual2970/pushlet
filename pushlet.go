@@ -62,9 +62,14 @@ func (p *Pushlet) SetHeartbeatInterval(interval time.Duration) {
 	p.heartbeatInterval = interval
 }
 
-// EnableDistributedMode enables multi-instance fan-out via novaque on a shared SQL store.
-func (p *Pushlet) EnableDistributedMode(client *novaque.Client, opts DistributedOptions) error {
-	return p.broker.EnableDistributedMode(client, opts)
+// EnableDistributedMode enables multi-instance fan-out via a [DistributedConnector].
+func (p *Pushlet) EnableDistributedMode(connector DistributedConnector) error {
+	return p.broker.EnableDistributedMode(connector)
+}
+
+// EnableDistributedNovaque enables distributed mode via an opened novaque client.
+func (p *Pushlet) EnableDistributedNovaque(client *novaque.Client, opts DistributedOptions) error {
+	return p.broker.EnableDistributedNovaque(client, opts)
 }
 
 // Start runs the internal broker and any distributed relay goroutines.

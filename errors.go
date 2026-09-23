@@ -7,5 +7,5 @@ var (
 	errConnectorNotRunning    = errors.New("pushlet: distributed connector not running")
 	errBrokerNotRunning       = errors.New("pushlet: broker not running")
 	errDistributedAlreadyOn = errors.New("pushlet: distributed mode already enabled")
-	errDistributedNoClient  = errors.New("pushlet: distributed novaque client is nil")
+	errDistributedNoConnector = errors.New("pushlet: distributed connector is nil")
 )
