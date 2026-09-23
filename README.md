@@ -15,7 +15,7 @@ Lightweight Go library for real-time push over **SSE** and **WebSocket**. In sta
 ## Install
 
 ```bash
-go get github.com/usual2970/pushlet@v0.0.17
+go get github.com/usual2970/pushlet@v0.0.18
 ```
 
 ## Quick start (standalone)
