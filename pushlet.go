@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,6 +20,13 @@ type Pushlet struct {
 	broker            *Broker
 	heartbeatInterval time.Duration // 心跳间隔
 	newLogger         NewLogger
+
+	asyncOpts     AsyncPublishOptions
+	asyncOut      chan asyncOutbound
+	asyncQuit     chan struct{}
+	asyncDone     chan struct{}
+	asyncDropped  atomic.Uint64
+	asyncStopOnce sync.Once
 }
 
 // Option configures a [Pushlet] in [New].
@@ -63,34 +72,37 @@ func (p *Pushlet) Start() {
 	p.broker.Start()
 }
 
-// Stop shuts down the broker and distributed connector, if enabled.
+// Stop shuts down the async publisher (when enabled), then the broker and
+// distributed connector.
 func (p *Pushlet) Stop() {
+	if p == nil {
+		return
+	}
+	p.stopAsyncPublisher()
 	p.broker.Stop()
 }
 
 // HandleSSE serves a long-lived Server-Sent Events stream.
 // The topic is taken from the "topic" query parameter; empty values use "default".
 func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
-	// 检查请求方法
-	if r.Method != "GET" {
+	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	topic := r.URL.Query().Get("topic")
+	if topic == "" || topic == "/" {
+		topic = "default"
+	}
+	p.serveSSE(w, r, topic)
+}
 
-	// 设置 SSE 相关头部
+func (p *Pushlet) serveSSE(w http.ResponseWriter, r *http.Request, topic string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
 
-	// 获取请求路径作为主题
-	topic := r.URL.Query().Get("topic")
-	if topic == "" || topic == "/" {
-		topic = "default"
-	}
-
-	// 创建新客户端
 	client := NewClient()
 	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("New client requested connection")
 
@@ -100,44 +112,38 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	defer p.broker.Unregister(client)
 
-	// 通知客户端连接已建立
 	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Sending connection message to client:")
 	client.SendMessage(NewMessage(topic, "connected", "Connection established"))
 	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Connection message sent to client:")
-	// 获取请求上下文
-	ctx := r.Context()
-	flusher := w.(http.Flusher)
 
-	// 创建心跳定时器
+	ctx := r.Context()
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
 	heartbeatTicker := time.NewTicker(p.heartbeatInterval)
 	defer heartbeatTicker.Stop()
 
-	// 监听消息、心跳和断开连接
 	for {
 		select {
 		case msg, ok := <-client.Send:
 			if !ok {
-				// 客户端通道已关闭
 				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client channel closed:")
 				return
 			}
-
-			// 写入 SSE 格式的消息
 			eventStr := "event: " + msg.Event + "\n"
 			dataStr := "data: " + msg.Data + "\n\n"
-
-			_, err := w.Write([]byte(eventStr + dataStr))
-			if err != nil {
+			if _, err := w.Write([]byte(eventStr + dataStr)); err != nil {
 				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Error writing to client:", err)
 				return
 			}
 			flusher.Flush()
 
 		case <-heartbeatTicker.C:
-			// 发送心跳注释行
 			heartbeatMsg := ": heartbeat " + time.Now().Format("2006-01-02 15:04:05") + "\n\n"
-			_, err := w.Write([]byte(heartbeatMsg))
-			if err != nil {
+			if _, err := w.Write([]byte(heartbeatMsg)); err != nil {
 				p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Error writing heartbeat to client:", err)
 				return
 			}
@@ -145,7 +151,6 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Heartbeat sent to client:")
 
 		case <-ctx.Done():
-			// 客户端断开连接
 			p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("Client disconnected:")
 			return
 		}
@@ -368,10 +373,16 @@ func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
 
 // Publish sends an event to all clients subscribed to topic.
 func (p *Pushlet) Publish(topic, event, data string) error {
-	return p.broker.Publish(topic, NewMessage(topic, event, data))
+	if p == nil {
+		return nil
+	}
+	return p.enqueuePublish(topic, event, data, false)
 }
 
 // PublishToAll broadcasts an event to every connected client regardless of topic.
 func (p *Pushlet) PublishToAll(event, data string) error {
-	return p.broker.PublishToAll(NewMessage("global", event, data))
+	if p == nil {
+		return nil
+	}
+	return p.enqueuePublish("", event, data, true)
 }

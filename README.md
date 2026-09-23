@@ -117,7 +117,36 @@ PostgreSQL: use `github.com/usual2970/novaque/driver/postgres` with a `pgx`/`dat
 | `RelayPublishTTL` | TTL for each relay message |
 | `Novaque` | Options passed to `novaque.Open` |
 
-For production multi-replica deployments, set `Channel` explicitly for stable identity and easier debugging.
+For production multi-replica deployments, set `Channel` explicitly for stable identity and easier debugging. In Kubernetes you can derive a stable name with:
+
+```go
+opts.Channel = pushlet.ResolveRelayChannel("") // pushlet-<POD_NAME> or pushlet-<hostname>
+```
+
+### Async publish (embedders)
+
+Distributed `Publish` performs synchronous novaque I/O on the calling goroutine. For HTTP handlers and business logic that must not wait on relay latency, enable a background publisher **before** `Start()`:
+
+```go
+p.EnableAsyncPublish(pushlet.DefaultAsyncPublishOptions())
+```
+
+Events enqueue best-effort; a full queue drops overflow (see `DroppedEvents()`). `Stop()` stops the worker first, then the broker.
+
+### Guarded SSE (access revocation)
+
+`HandleSSEGuarded` wraps `HandleSSE` with periodic `IsValid` checks, optional unix expiry, and write deadlines so slow readers cannot block revocation:
+
+```go
+pushlet.HandleSSEGuarded(w, r, pushlet.SSEGuard{
+    IsValid: func(ctx context.Context) bool { /* access still active */ },
+    ExpiresAt: jwtExpUnix,
+})
+```
+
+### MySQL open helper
+
+`OpenMySQLNovaque` opens a pooled `*sql.DB`, pings, and returns an opened `*novaque.Client` for `EnableDistributedMode`. The embedder closes the DB after `Stop()`.
 
 ### Changes since v0.0.11 and earlier
 
@@ -195,8 +224,14 @@ On connect you receive `event: connected`. Heartbeats are SSE comment lines (`: 
 | `Start()` | Start broker (**required before** accepting connections) |
 | `Stop()` | Stop broker and distributed connector |
 | `HandleSSE` / `HandleWebsocket` | HTTP handlers |
+| `EnableAsyncPublish(opts)` | Non-blocking publish queue (optional, before `Start`) |
+| `DroppedEvents()` | Async overflow / failed publish counter |
 | `Publish(topic, event, data)` | Publish to a topic; returns `error` |
+| `PublishJSON(topic, event, v)` | JSON-encoded publish |
 | `PublishToAll(event, data)` | Broadcast to all subscribed topics; returns `error` |
+| `ResolveRelayChannel(configured)` | K8s-friendly novaque channel name |
+| `OpenMySQLNovaque(ctx, dsn, opts, pool)` | DSN → `*sql.DB` + `*novaque.Client` |
+| `HandleSSEGuarded(w, r, guard)` | SSE with validity recheck and write deadlines |
 
 Registration fails with HTTP 503 if the broker is not `Start`ed. When a client send buffer is full, the connection is dropped and unregistered to avoid sends on a closed channel.
 

@@ -3,7 +3,14 @@
 //
 // Construct a server with [New], call [Pushlet.Start], wire HTTP handlers via
 // [Pushlet.HandleSSE] and [Pushlet.HandleWebsocket], and publish events with
-// [Pushlet.Publish] or [Pushlet.PublishToAll].
+// [Pushlet.Publish], [Pushlet.PublishToAll], or [Pushlet.PublishJSON].
+//
+// Optional [Pushlet.EnableAsyncPublish] queues publishes on a background worker
+// so callers never block on novaque relay I/O. [Pushlet.HandleSSEGuarded]
+// supports revocable SSE streams with periodic validity checks.
+//
+// [ResolveRelayChannel] and [OpenMySQLNovaque] are helpers for Kubernetes-style
+// deployments and MySQL wiring.
 //
 // # Single-instance mode
 //
