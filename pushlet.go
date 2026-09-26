@@ -351,7 +351,12 @@ func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
 	}()
 	switch {
 	case bytes.Equal(parts[0], []byte("SUB")):
-		// 响应客户端的 ping
+		// A malformed command must never panic: parts[1] below assumes the
+		// frame carried a topic argument.
+		if len(parts) < 2 {
+			err = errors.New("SUB requires a topic")
+			return nil, err
+		}
 		topic := string(parts[1])
 		log.WithField("topic", topic).Println("Client subscribed to topic:")
 		p.broker.Subscribe(client, topic)
@@ -359,7 +364,11 @@ func (p *Pushlet) exec(parts [][]byte, client *Client) ([]byte, error) {
 		return okBytes, nil
 
 	case bytes.Equal(parts[0], []byte("UNSUB")):
-		// 处理主题订阅（如果需要动态订阅功能）
+		// Same guard as SUB: parts[1] below requires a topic argument.
+		if len(parts) < 2 {
+			err = errors.New("UNSUB requires a topic")
+			return nil, err
+		}
 		topic := string(parts[1])
 		log.WithField("topic", topic).Println("Client unsubscribing from topic:")
 		p.broker.Unsubscribe(client, topic)
