@@ -5,6 +5,8 @@ Lightweight Go library for real-time push over **SSE** and **WebSocket**. In sta
 ![Go Version](https://img.shields.io/badge/Go-1.26.5+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
+**Live demo:** <https://pushlet-sample.ikit.fun/> — a small instant messenger built on pushlet ([source](https://github.com/usual2970/pushlet-sample-im)). Register in two browsers and watch room chat, the online list, and direct messages flow over SSE, with pushlet running its novaque/SQLite distributed relay.
+
 ## Requirements
 
 | Mode | Dependencies |
@@ -16,7 +18,7 @@ Lightweight Go library for real-time push over **SSE** and **WebSocket**. In sta
 ## Install
 
 ```bash
-go get github.com/usual2970/pushlet@v0.0.18
+go get github.com/usual2970/pushlet@v0.0.21
 ```
 
 ## Quick start (standalone)
@@ -65,192 +67,12 @@ func main() {
 - WebSocket: `GET /ws?topic=<name>` (optional initial topic)
 - Publish: `POST /send?topic=<name>&message=<text>`
 
-## Distributed mode
+## Going further
 
-Pick **one** backend per process. Both use the same JSON **relay envelope** on a single relay channel/topic (default `pushlet-relay`).
-
-1. Build a [DistributedConnector](distributed_connector.go) (`RedisConnector` or `NovaqueConnector`).
-2. Call `EnableDistributedMode(connector)` **before** `Start()` (once per process).
-3. Then `Start()` / `Stop()`.
-
-### Redis (pub/sub)
-
-Ephemeral **fire-and-forget** relay—fast, no SQL, but messages are not durably queued for offline replicas.
-
-```go
-opts := pushlet.DefaultRedisOptions()
-opts.Addr = "127.0.0.1:6379"
-
-conn, err := pushlet.NewRedisConnector(opts)
-if err != nil {
-	log.Fatal(err)
-}
-
-p := pushlet.New()
-if err := p.EnableDistributedMode(conn); err != nil {
-	log.Fatal(err)
-}
-p.Start()
-defer p.Stop()
-```
-
-### Novaque (SQL)
-
-Cross-instance delivery is **at-least-once**: clients should dedupe or handle idempotently. Relay publishes fan out only to **channels that exist at publish time**; new instances should finish `Start()` before taking traffic.
-
-1. Each instance opens the **same** database with a [novaque driver](https://github.com/usual2970/novaque) (`mysql`, `postgres`, or `sqlite`).
-2. Call `novaque.Open(driver.New(db), opts.Novaque)` and `EnableDistributedNovaque(client, opts)`.
-
-MySQL example:
-
-```go
-import (
-	"database/sql"
-
-	_ "github.com/go-sql-driver/mysql"
-
-	"github.com/usual2970/novaque"
-	"github.com/usual2970/novaque/driver/mysql"
-	"github.com/usual2970/pushlet"
-)
-
-db, err := sql.Open("mysql", dsn)
-if err != nil {
-	log.Fatal(err)
-}
-
-opts := pushlet.DefaultDistributedOptions()
-// opts.Channel = "pushlet-prod-1" // optional: set per replica; if empty, auto-generated per process
-
-client, err := novaque.Open(mysql.New(db), opts.Novaque)
-if err != nil {
-	log.Fatal(err)
-}
-
-p := pushlet.New()
-if err := p.EnableDistributedNovaque(client, opts); err != nil {
-	log.Fatal(err)
-}
-p.Start()
-defer p.Stop()
-```
-
-PostgreSQL: use `github.com/usual2970/novaque/driver/postgres` with a `pgx`/`database/sql` pool. SQLite: use `github.com/usual2970/novaque/driver/sqlite` (see novaque docs for WAL / busy-timeout DSN flags).
-
-`DistributedOptions` fields:
-
-| Field | Description |
-|-------|-------------|
-| `Channel` | Novaque channel; **must be unique per replica** in multi-instance setups. If empty, auto-generated as `pushlet-node-<host>-<random>` |
-| `RelayTopic` | Novaque topic for relay traffic (default `pushlet-relay`) |
-| `RelayPublishTTL` | TTL for each relay message |
-| `Novaque` | Options passed to `novaque.Open` |
-
-For production multi-replica deployments, set `Channel` explicitly for stable identity and easier debugging. In Kubernetes you can derive a stable name with:
-
-```go
-opts.Channel = pushlet.ResolveRelayChannel("") // pushlet-<POD_NAME> or pushlet-<hostname>
-```
-
-### Async publish (embedders)
-
-Distributed `Publish` performs synchronous novaque I/O on the calling goroutine. For HTTP handlers and business logic that must not wait on relay latency, enable a background publisher **before** `Start()`:
-
-```go
-p.EnableAsyncPublish(pushlet.DefaultAsyncPublishOptions())
-```
-
-Events enqueue best-effort; a full queue drops overflow (see `DroppedEvents()`). `Stop()` stops the worker first, then the broker.
-
-### Guarded SSE (access revocation)
-
-`HandleSSEGuarded` wraps `HandleSSE` with periodic `IsValid` checks, optional unix expiry, and write deadlines so slow readers cannot block revocation:
-
-```go
-pushlet.HandleSSEGuarded(w, r, pushlet.SSEGuard{
-    IsValid: func(ctx context.Context) bool { /* access still active */ },
-    ExpiresAt: jwtExpUnix,
-})
-```
-
-### MySQL open helper
-
-`OpenMySQLNovaque` opens a pooled `*sql.DB`, pings, and returns an opened `*novaque.Client` for `EnableDistributedNovaque`. The embedder closes the DB after `Stop()`.
-
-### Changes since v0.0.20
-
-- WebSocket text commands are arity-checked: a malformed frame such as `SUB\n` (no topic argument) is logged and dropped instead of panicking the per-connection read goroutine — which killed the whole embedding process.
-
-### Changes since v0.0.18
-
-- `EnableDistributedMode` now accepts a [DistributedConnector](distributed_connector.go); use `EnableDistributedNovaque` for the previous novaque-only signature.
-- Nil-client errors use `errDistributedNoConnector` instead of the removed `errDistributedNoClient` (`errors.Is` checks must be updated).
-- Redis distributed mode returns via [RedisConnector](redis_connector.go) (unified relay envelope, not legacy per-topic Redis channels).
-
-### Changes since v0.0.11 and earlier
-
-- Distributed mode no longer uses the v0.0.11 `EnableDistributedMode(redisAddr, password, db int)` API.
-- `Publish` / `PublishToAll` return `error` when the active connector fails.
-
-## Runnable example (two instances + Docker)
-
-`example/` runs **two distributed instances in one process** (defaults **9090** / **9091**). Without `PUSHLET_MYSQL_DSN`, it starts MySQL 8 via testcontainers (Docker required).
-
-```bash
-cd example
-go run .
-```
-
-Cross-instance push:
-
-```bash
-# Terminal 1: subscribe on instance B
-curl -N 'http://localhost:9091/events?topic=demo'
-
-# Terminal 2: publish on instance A
-curl -X POST 'http://localhost:9090/send?topic=demo&message=hello'
-```
-
-Environment variables:
-
-| Variable | Meaning |
-|----------|---------|
-| `PUSHLET_MYSQL_DSN` | Use existing MySQL; skip testcontainer |
-| `PUSHLET_ADDR` | Instance A listen address (default `:9090`) |
-| `PUSHLET_ADDR_B` | Instance B listen address (default `:9091`) |
-| `PUSHLET_NOVAQUE_CHANNEL_A` / `_B` | Novaque channel for A/B (default `pushlet-a` / `pushlet-b`) |
-
-## Protocol
-
-### SSE
-
-The server emits a standard Event Stream. Application messages look like:
-
-```text
-event: message
-data: <payload>
-
-```
-
-On connect you receive `event: connected`. Heartbeats are SSE comment lines (`: heartbeat ...`).
-
-### WebSocket
-
-- Server pushes **binary** frames: `topic` + space + JSON `Message`.
-- Dynamic subscribe/unsubscribe uses **binary text commands** (not JSON):
-  - `SUB <topic>\n`
-  - `UNSUB <topic>\n`
-  - `PING\n`
-- Success replies are binary `OK`.
-
-### Message (JSON fields)
-
-| Field | Description |
-|-------|-------------|
-| `topic` | Topic name |
-| `event` | Event name (SSE `event` line) |
-| `data` | Payload body |
-| `timestamp` | Timestamp |
+- **[Distributed mode](docs/distributed.md)** — Redis or novaque (MySQL / PostgreSQL / SQLite) relay, per-replica channels, async publish, guarded SSE, operational notes.
+- **[Wire protocol](docs/protocol.md)** — SSE framing, WebSocket commands, the `Message` JSON shape.
+- **Runnable example** — `example/` runs two distributed instances in one process (`cd example && go run .`; without `PUSHLET_MYSQL_DSN` it starts MySQL via testcontainers, Docker required). Subscribe on `:9091/events?topic=demo`, publish on `:9090/send?...`, watch the message cross instances.
+- **[Changelog](CHANGELOG.md)** — breaking changes and fixes by version.
 
 ## API summary
 
@@ -275,21 +97,6 @@ On connect you receive `event: connected`. Heartbeats are SSE comment lines (`: 
 
 Registration fails with HTTP 503 if the broker is not `Start`ed. When a client send buffer is full, the connection is dropped and unregistered to avoid sends on a closed channel.
 
-## Layout
-
-```text
-pushlet/
-├── pushlet.go              # HTTP entrypoints and Publish API
-├── broker.go               # Topic routing and distributed relay
-├── client.go               # Per-connection outbound channel and backpressure
-├── novaque_connector.go    # Novaque relay implementation
-├── distributed_connector.go
-├── message.go
-├── logger.go
-├── example/main.go         # Two-instance testcontainers demo
-└── internal/testmysql/     # MySQL container for integration tests (tag: integration)
-```
-
 ## Tests
 
 ```bash
@@ -298,13 +105,6 @@ go test ./...
 # Requires Docker
 go test -tags=integration ./...
 ```
-
-## Operations
-
-- Before scaling out, ensure every instance has completed `EnableDistributedMode` + `Start()` before load balancing.
-- Slow consumers are disconnected under backpressure; clients should reconnect.
-- Restrict CORS and `CheckOrigin` in production (defaults are permissive for demos).
-- Monitor database and novaque backlog; invalid relay envelopes are logged and dropped.
 
 ## License
 
