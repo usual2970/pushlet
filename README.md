@@ -177,6 +177,10 @@ pushlet.HandleSSEGuarded(w, r, pushlet.SSEGuard{
 
 `OpenMySQLNovaque` opens a pooled `*sql.DB`, pings, and returns an opened `*novaque.Client` for `EnableDistributedNovaque`. The embedder closes the DB after `Stop()`.
 
+### Changes since v0.0.20
+
+- WebSocket text commands are arity-checked: a malformed frame such as `SUB\n` (no topic argument) is logged and dropped instead of panicking the per-connection read goroutine — which killed the whole embedding process.
+
 ### Changes since v0.0.18
 
 - `EnableDistributedMode` now accepts a [DistributedConnector](distributed_connector.go); use `EnableDistributedNovaque` for the previous novaque-only signature.
