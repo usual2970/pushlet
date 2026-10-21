@@ -102,11 +102,12 @@ func (p *Pushlet) HandleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Pushlet) serveSSE(w http.ResponseWriter, r *http.Request, topic string) {
+	// SSE framing only. Do not set Access-Control-* here: apps that use
+	// credentialed EventSource (cookies) cannot accept Allow-Origin: *, and
+	// Gin/other CORS middleware must own the allow-list.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
 
 	client := NewClient()
 	p.newLogger().WithField("client_id", client.ID).WithField("topic", topic).Println("New client requested connection")
